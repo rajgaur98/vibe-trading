@@ -100,6 +100,12 @@ Starts the blocking cron scheduler that runs evaluations every 4 hours:
 python -m vibe_trading.cli live
 ```
 
+### Run On-Demand Trade (Bypass Schedule)
+Runs a single evaluation and execution window immediately:
+```bash
+python -m vibe_trading.cli trade-once
+```
+
 ---
 
 ## Docker Usage 🐳
@@ -122,7 +128,13 @@ Runs the backtest and generates the HTML report in `data/reports/` (persisted on
 docker compose run --rm backtester
 ```
 
-### 4. Start the Live Scheduler Bot (Background)
+### 4. Run On-Demand Trade (Bypass Schedule)
+Runs a single evaluation window immediately:
+```bash
+docker compose run --rm trade-once
+```
+
+### 5. Start the Live Scheduler Bot (Background)
 Runs the live scheduler container in the background:
 ```bash
 docker compose up -d vibe-bot

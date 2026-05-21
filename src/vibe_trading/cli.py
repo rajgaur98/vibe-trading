@@ -61,6 +61,13 @@ def main():
         help="Symbols to monitor and trade"
     )
 
+    # 4. Trade-once command (on demand bypass)
+    trade_once_parser = subparsers.add_parser("trade-once", help="Trigger a single sync and evaluation window immediately on demand")
+    trade_once_parser.add_argument(
+        "--symbols", nargs="+", default=["BTC/USDT", "ETH/USDT"],
+        help="Symbols to monitor and trade"
+    )
+
     args = parser.parse_args()
 
     if args.command == "bootstrap":
@@ -86,6 +93,12 @@ def main():
         logger.info(f"Starting recurring 4-hour live scheduler for: {args.symbols}")
         scheduler = TradingScheduler(args.symbols)
         scheduler.start()
+
+    elif args.command == "trade-once":
+        logger.info(f"Triggering on-demand trading execution window for: {args.symbols}")
+        scheduler = TradingScheduler(args.symbols)
+        scheduler.sync_and_evaluate()
+        logger.info("On-demand execution window completed.")
 
 if __name__ == "__main__":
     main()

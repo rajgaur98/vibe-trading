@@ -22,3 +22,14 @@ services:
       - .env
     # Command to run backtest
     command: ["backtest", "--start", "2026-01-01"]
+
+  trade-once:
+    build: .
+    container_name: vibe_trade_once
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    # Command to run on-demand trade
+    command: ["trade-once"]
+
