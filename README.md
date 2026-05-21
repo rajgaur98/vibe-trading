@@ -102,8 +102,37 @@ python -m vibe_trading.cli live
 
 ---
 
+## Docker Usage 🐳
+
+Using Docker allows running the bot and backtests without manually installing system-level dependencies like compiling `ta-lib` C libraries.
+
+### 1. Build the Docker Image
+```bash
+docker compose build
+```
+
+### 2. Run Historical Data Bootstrap
+```bash
+docker compose run --rm vibe-bot bootstrap
+```
+
+### 3. Run Backtester
+Runs the backtest and generates the HTML report in `data/reports/` (persisted on the host):
+```bash
+docker compose run --rm backtester
+```
+
+### 4. Start the Live Scheduler Bot (Background)
+Runs the live scheduler container in the background:
+```bash
+docker compose up -d vibe-bot
+```
+
+---
+
 ## Running Tests
 Run unit verification tests using pytest:
 ```bash
 PYTHONPATH=src pytest
 ```
+
