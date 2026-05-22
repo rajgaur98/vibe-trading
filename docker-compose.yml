@@ -8,6 +8,8 @@ services:
     volumes:
       # Mount the data folder to persist DuckDB databases and reports on the host
       - ./data:/app/data
+      - ./src:/app/src
+      - ./tests:/app/tests
     env_file:
       - .env
     # Default to running the live scheduler
@@ -18,6 +20,8 @@ services:
     container_name: vibe_backtester
     volumes:
       - ./data:/app/data
+      - ./src:/app/src
+      - ./tests:/app/tests
     env_file:
       - .env
     # Command to run backtest
@@ -28,6 +32,8 @@ services:
     container_name: vibe_trade_once
     volumes:
       - ./data:/app/data
+      - ./src:/app/src
+      - ./tests:/app/tests
     env_file:
       - .env
     # Command to run on-demand trade
