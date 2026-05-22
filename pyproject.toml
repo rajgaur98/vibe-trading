@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "pydantic>=2.6.1",
     "TA-Lib>=0.4.28",
+    "langfuse>=4.0.0",
 ]
 
 [project.optional-dependencies]

@@ -98,6 +98,12 @@ def main():
         logger.info(f"Triggering on-demand trading execution window for: {args.symbols}")
         scheduler = TradingScheduler(args.symbols)
         scheduler.sync_and_evaluate()
+        try:
+            from langfuse import get_client
+            logger.info("Flushing Langfuse traces...")
+            get_client().flush()
+        except Exception as e:
+            logger.warning(f"Failed to flush Langfuse: {e}")
         logger.info("On-demand execution window completed.")
 
 if __name__ == "__main__":

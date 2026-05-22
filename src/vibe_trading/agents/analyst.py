@@ -2,6 +2,7 @@ from pydantic import BaseModel, Field
 from typing import Literal
 import json
 import os
+from langfuse import observe, propagate_attributes
 from vibe_trading.agents.client import GeminiClient
 
 class AnalystOutput(BaseModel):
@@ -44,21 +45,28 @@ Remember the classic Murphy principles:
 Provide your output strictly adhering to the requested Pydantic JSON schema.
 """
 
+    @observe()
     def analyze(self, snapshot: dict) -> AnalystOutput:
         """Runs the analyst agent over the market snapshot."""
-        prompt = f"""
+        symbol = snapshot.get("symbol", "unknown")
+        with propagate_attributes(
+            trace_name=f"Analyst-analyze-{symbol}",
+            tags=[symbol],
+            metadata={"symbol": symbol}
+        ):
+            prompt = f"""
 Analyze the following Market Snapshot for {snapshot['symbol']}:
 {json.dumps(snapshot, indent=2, default=str)}
 
 Evaluate all parameters, check for price-volume confirmation or divergence, and output the analysis.
 """
-        raw_output = self.client.call_gemini(
-            model_name=self.model,
-            system_instruction=self.system_instruction,
-            prompt=prompt,
-            response_schema=AnalystOutput
-        )
-        
-        # Parse the structured response
-        data = json.loads(raw_output)
-        return AnalystOutput(**data)
+            raw_output = self.client.call_gemini(
+                model_name=self.model,
+                system_instruction=self.system_instruction,
+                prompt=prompt,
+                response_schema=AnalystOutput
+            )
+            
+            # Parse the structured response
+            data = json.loads(raw_output)
+            return AnalystOutput(**data)

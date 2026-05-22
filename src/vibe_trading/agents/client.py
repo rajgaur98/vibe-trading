@@ -3,6 +3,7 @@ from google import genai
 from google.genai import types
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import logging
+from langfuse import observe
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ class GeminiClient:
         # Initialize Google GenAI client
         self.client = genai.Client(api_key=api_key)
 
+    @observe(as_type="generation")
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -51,4 +53,22 @@ class GeminiClient:
             config=config
         )
         
+        try:
+            from langfuse import get_client
+            langfuse = get_client()
+            input_tokens = response.usage_metadata.prompt_token_count if response.usage_metadata else 0
+            output_tokens = response.usage_metadata.candidates_token_count if response.usage_metadata else 0
+            langfuse.update_current_generation(
+                input=prompt,
+                output=response.text,
+                model=model_name,
+                usage_details={
+                    "input": input_tokens,
+                    "output": output_tokens,
+                    "total": input_tokens + output_tokens
+                }
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log generation details to Langfuse: {e}")
+            
         return response.text

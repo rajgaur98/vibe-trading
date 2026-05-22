@@ -5,6 +5,7 @@ import os
 from uuid import uuid4
 from datetime import datetime
 from decimal import Decimal
+from langfuse import observe, propagate_attributes
 from vibe_trading.agents.client import GeminiClient
 from vibe_trading.agents.analyst import AnalystOutput
 
@@ -51,6 +52,7 @@ Your core directives:
 Provide your output strictly matching the Pydantic JSON schema.
 """
 
+    @observe()
     def decide(
         self,
         symbol: str,
@@ -59,7 +61,12 @@ Provide your output strictly matching the Pydantic JSON schema.
         open_positions: list
     ) -> dict:
         """Invokes the Head Trader agent to make a trade decision."""
-        prompt = f"""
+        with propagate_attributes(
+            trace_name=f"HeadTrader-decide-{symbol}",
+            tags=[symbol],
+            metadata={"symbol": symbol}
+        ):
+            prompt = f"""
 Make a trading decision for {symbol}.
 
 --- Analyst Output ---
@@ -73,26 +80,26 @@ Make a trading decision for {symbol}.
 
 Synthesize the data and output your final trading proposal.
 """
-        raw_output = self.client.call_gemini(
-            model_name=self.model,
-            system_instruction=self.system_instruction,
-            prompt=prompt,
-            response_schema=HeadTraderOutput
-        )
-        
-        data = json.loads(raw_output)
-        
-        # Hydrate the final proposal dictionary with system fields (UUID, timestamp)
-        proposal = {
-            "decision_id": str(uuid4()),
-            "timestamp": datetime.utcnow(),
-            "symbol": symbol,
-            "action": data["action"],
-            "stop_loss_strategy": data["stop_loss_strategy"],
-            "take_profit_strategy": data["take_profit_strategy"],
-            "risk_reward_ratio": Decimal(str(data["risk_reward_ratio"])),
-            "hold_period_bias": data["hold_period_bias"],
-            "reasoning_summary": data["reasoning_summary"]
-        }
-        
-        return proposal
+            raw_output = self.client.call_gemini(
+                model_name=self.model,
+                system_instruction=self.system_instruction,
+                prompt=prompt,
+                response_schema=HeadTraderOutput
+            )
+            
+            data = json.loads(raw_output)
+            
+            # Hydrate the final proposal dictionary with system fields (UUID, timestamp)
+            proposal = {
+                "decision_id": str(uuid4()),
+                "timestamp": datetime.utcnow(),
+                "symbol": symbol,
+                "action": data["action"],
+                "stop_loss_strategy": data["stop_loss_strategy"],
+                "take_profit_strategy": data["take_profit_strategy"],
+                "risk_reward_ratio": Decimal(str(data["risk_reward_ratio"])),
+                "hold_period_bias": data["hold_period_bias"],
+                "reasoning_summary": data["reasoning_summary"]
+            }
+            
+            return proposal
