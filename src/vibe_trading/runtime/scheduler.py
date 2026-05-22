@@ -182,7 +182,7 @@ class TradingScheduler:
     def _send_discord_alert(self, message: str):
         """Sends an alert to Discord webhook if configured."""
         webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-        if not webhook_url:
+        if not webhook_url or "your_discord_webhook_url" in webhook_url:
             return
             
         data = json.dumps({"content": message}).encode('utf-8')

@@ -30,7 +30,7 @@ class HeadTraderOutput(BaseModel):
 class HeadTrader:
     def __init__(self, client: GeminiClient = None):
         self.client = client or GeminiClient()
-        self.model = "gemini-3.1-pro"
+        self.model = "gemini-3.1-pro-preview"
         
         self.system_instruction = """
 You are the Head Trader of a systematic crypto hedge fund. 
