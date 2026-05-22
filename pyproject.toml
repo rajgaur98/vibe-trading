@@ -18,6 +18,9 @@ dependencies = [
     "pydantic>=2.6.1",
     "TA-Lib>=0.4.28",
     "langfuse>=4.0.0",
+    "openinference-instrumentation-google-genai",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
 ]
 
 [project.optional-dependencies]
