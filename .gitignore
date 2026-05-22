@@ -39,6 +39,6 @@ env/
 *.swo
 
 # Project specific local files
-.env
-data/
-.pytest_cache/
+/.env
+/data/
+/.pytest_cache/

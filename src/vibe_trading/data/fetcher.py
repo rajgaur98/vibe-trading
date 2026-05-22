@@ -97,7 +97,7 @@ class DataFetcher:
                     for _, row in full_df.iterrows():
                         db.conn.execute("""
                             INSERT OR IGNORE INTO candles (symbol, timeframe, timestamp, open, high, low, close, volume)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (symbol, tf, row['timestamp'], row['open'], row['high'], row['low'], row['close'], row['volume']))
         db.close()
 
@@ -111,7 +111,7 @@ class DataFetcher:
                     for _, row in df.iterrows():
                         db.conn.execute("""
                             INSERT OR IGNORE INTO candles (symbol, timeframe, timestamp, open, high, low, close, volume)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (symbol, tf, row['timestamp'], row['open'], row['high'], row['low'], row['close'], row['volume']))
         db.close()
 
