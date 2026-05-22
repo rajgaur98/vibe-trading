@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Literal
 import json
+import os
 from uuid import uuid4
 from datetime import datetime
 from decimal import Decimal
@@ -30,7 +31,7 @@ class HeadTraderOutput(BaseModel):
 class HeadTrader:
     def __init__(self, client: GeminiClient = None):
         self.client = client or GeminiClient()
-        self.model = "gemini-3.1-pro-preview"
+        self.model = os.getenv("GEMINI_TRADER_MODEL", "gemini-2.5-flash")
         
         self.system_instruction = """
 You are the Head Trader of a systematic crypto hedge fund. 

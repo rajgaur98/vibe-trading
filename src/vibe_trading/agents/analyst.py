@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Literal
 import json
+import os
 from vibe_trading.agents.client import GeminiClient
 
 class AnalystOutput(BaseModel):
@@ -22,7 +23,7 @@ class AnalystOutput(BaseModel):
 class TechnicalVolumeAnalyst:
     def __init__(self, client: GeminiClient = None):
         self.client = client or GeminiClient()
-        self.model = "gemini-3.5-flash"
+        self.model = os.getenv("GEMINI_ANALYST_MODEL", "gemini-3.5-flash")
         
         self.system_instruction = """
 You are an elite Crypto Technical and Volume Analyst specializing in swing trading. 
