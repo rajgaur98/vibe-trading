@@ -48,7 +48,7 @@ def get_status():
         "symbols": symbols,
         "open_positions_count": open_count,
         "database_path": db_path,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
 @app.post("/api/trigger-tick")
@@ -93,7 +93,7 @@ def get_metrics():
             equity_res = conn.execute(
                 "SELECT timestamp, balance FROM portfolio_state ORDER BY timestamp ASC"
             ).fetchall()
-            equity_curve = [{"timestamp": r[0].isoformat(), "balance": r[1]} for r in equity_res]
+            equity_curve = [{"timestamp": r[0].isoformat() + "Z", "balance": r[1]} for r in equity_res]
         except Exception:
             pass
         
@@ -117,7 +117,7 @@ def get_metrics():
         drawdown = ((peak_balance - balance) / peak_balance) * 100
         
     if not equity_curve:
-        equity_curve = [{"timestamp": datetime.utcnow().isoformat(), "balance": 10000.0}]
+        equity_curve = [{"timestamp": datetime.utcnow().isoformat() + "Z", "balance": 10000.0}]
         
     return {
         "total_trades": total_trades,
@@ -143,7 +143,7 @@ def get_positions():
                 positions.append({
                     "symbol": r[0],
                     "side": r[1],
-                    "entry_time": r[2].isoformat() if r[2] else None,
+                    "entry_time": r[2].isoformat() + "Z" if r[2] else None,
                     "entry_price": r[3],
                     "size_usd": r[4],
                     "stop_price": r[5],
@@ -168,9 +168,9 @@ def get_trades():
                     "trade_id": r[0],
                     "symbol": r[1],
                     "action": r[2],
-                    "entry_time": r[3].isoformat() if r[3] else None,
+                    "entry_time": r[3].isoformat() + "Z" if r[3] else None,
                     "entry_price": r[4],
-                    "close_time": r[5].isoformat() if r[5] else None,
+                    "close_time": r[5].isoformat() + "Z" if r[5] else None,
                     "close_price": r[6],
                     "size_usd": r[7],
                     "realized_pnl": r[8],
@@ -199,7 +199,7 @@ def get_decisions(limit: int = 30):
                     
                 decisions.append({
                     "decision_id": r[0],
-                    "timestamp": r[1].isoformat() if r[1] else None,
+                    "timestamp": r[1].isoformat() + "Z" if r[1] else None,
                     "symbol": r[2],
                     "action": r[3],
                     "stop_loss_strategy": r[4],

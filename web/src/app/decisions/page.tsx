@@ -111,7 +111,7 @@ export default function Decisions() {
                     </div>
                     <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
                       <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{new Date(dec.timestamp).toLocaleString()}</span>
+                      <span suppressHydrationWarning>{new Date(dec.timestamp).toLocaleString()}</span>
                     </div>
                   </div>
 

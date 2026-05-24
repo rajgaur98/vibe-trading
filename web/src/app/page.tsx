@@ -199,7 +199,7 @@ export default function Dashboard() {
                         </Badge>
                       </div>
 
-                      <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
+                      <span suppressHydrationWarning className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
                         {dec.timestamp
                           ? new Date(dec.timestamp).toLocaleString(undefined, {
                               dateStyle: "medium",

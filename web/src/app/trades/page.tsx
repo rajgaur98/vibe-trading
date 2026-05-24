@@ -129,8 +129,8 @@ export default function Trades() {
           ))}
         </svg>
         <div className="flex justify-between text-[10px] text-slate-500 font-semibold px-4 pt-1">
-          <span>{new Date(curve[0].timestamp).toLocaleDateString()}</span>
-          <span>{new Date(curve[curve.length - 1].timestamp).toLocaleDateString()}</span>
+          <span suppressHydrationWarning>{new Date(curve[0].timestamp).toLocaleDateString()}</span>
+          <span suppressHydrationWarning>{new Date(curve[curve.length - 1].timestamp).toLocaleDateString()}</span>
         </div>
       </div>
     );
@@ -282,7 +282,7 @@ export default function Trades() {
                         <TableCell className={isWin ? "text-emerald-400" : "text-rose-400"}>
                           {isWin ? "+" : ""}${trade.realized_pnl.toFixed(2)}
                         </TableCell>
-                        <TableCell className="text-[10px] text-slate-500">
+                        <TableCell suppressHydrationWarning className="text-[10px] text-slate-500">
                           <div>
                             In:{" "}
                             {new Date(trade.entry_time).toLocaleString(undefined, {

@@ -65,7 +65,7 @@ export default function PositionsList({
                           {pos.side}
                         </Badge>
                       </div>
-                      <span className="text-[10px] text-slate-500 font-medium">
+                      <span suppressHydrationWarning className="text-[10px] text-slate-500 font-medium">
                         {pos.entry_time
                           ? new Date(pos.entry_time).toLocaleString(undefined, {
                               month: "short",
