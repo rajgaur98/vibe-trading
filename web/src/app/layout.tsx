@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import { Outfit } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 import Navigation from "@/components/Navigation";
 
-const outfit = Outfit({
+const inter = Inter({
   subsets: ["latin"],
-  variable: "--font-outfit",
+  variable: "--font-sans",
 });
 
 export const metadata: Metadata = {
@@ -21,7 +21,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${outfit.variable} dark h-full antialiased`}
+      className={`${inter.variable} dark h-full antialiased`}
     >
       <body className="h-full bg-slate-950 font-sans text-slate-200 antialiased flex flex-row overflow-hidden">
         {/* Navigation Sidebar */}
