@@ -116,4 +116,27 @@ class Database:
                 agent_transcripts VARCHAR -- JSON string of the transcripts
             )
         """)
+
+        # 5. Portfolio State
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio_state (
+                timestamp TIMESTAMP PRIMARY KEY,
+                balance DOUBLE,
+                peak_balance DOUBLE
+            )
+        """)
+
+        # 6. Open Positions
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS open_positions (
+                symbol VARCHAR PRIMARY KEY,
+                side VARCHAR,
+                entry_time TIMESTAMP,
+                entry_price DOUBLE,
+                size_usd DOUBLE,
+                stop_price DOUBLE,
+                take_profit_price DOUBLE
+            )
+        """)
+
         logger.info("Database schemas verified.")

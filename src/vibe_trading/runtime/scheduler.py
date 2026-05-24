@@ -22,16 +22,17 @@ class TradingScheduler:
     def __init__(self, symbols: list):
         self.symbols = symbols
         self.db = Database()
-        self.fetcher = DataFetcher()
-        self.pipeline = FeaturePipeline(self.db)
-        self.risk_manager = RiskManager()
         
         # Load correct broker dependency based on TRADING_MODE
         mode = os.getenv("TRADING_MODE", "PAPER").upper()
         if mode == "LIVE_SANDBOX":
             self.broker = CoinbaseBroker()
         else:
-            self.broker = PaperBroker()
+            self.broker = PaperBroker(db=self.db)
+        
+        self.fetcher = DataFetcher()
+        self.pipeline = FeaturePipeline(self.db)
+        self.risk_manager = RiskManager()
             
         # Initialize agents
         self.analyst = TechnicalVolumeAnalyst()
@@ -69,34 +70,43 @@ class TradingScheduler:
             logger.info(f"--- Execution Window: {now.strftime('%Y-%m-%d %H:%M:%S UTC')} ---")
             
             try:
-                # 1. Fetch latest candles and write to DB
+                # 1. Fetch latest candles and write to DB (internally connects and closes DB)
                 self.fetcher.incremental_update(self.db, self.symbols, ["1d", "4h"], limit=15)
                 
                 # 2. Update existing broker positions (for OCO fills in paper/sandbox)
                 self.db.connect()
                 current_prices = {}
-                for sym in self.symbols:
-                    price_res = self.db.conn.execute(
-                        "SELECT close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
-                        (sym,)
-                    ).fetchone()
-                    if price_res:
-                        current_prices[sym] = price_res[0]
+                try:
+                    for sym in self.symbols:
+                        price_res = self.db.conn.execute(
+                            "SELECT close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
+                            (sym,)
+                        ).fetchone()
+                        if price_res:
+                            current_prices[sym] = price_res[0]
+                finally:
+                    self.db.close()
                         
+                # Update positions (internally connects and closes DuckDB inside PaperBroker)
                 closed_trades = self.broker.update_positions(current_prices)
-                for trade in closed_trades:
-                    # Log closed trade to DB
-                    self.db.conn.execute("""
-                        INSERT INTO trades (trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (trade["trade_id"], trade["symbol"], trade["action"], trade["entry_time"], trade["entry_price"],
-                          trade["close_time"], trade["close_price"], trade["size_usd"], trade["realized_pnl"], trade["result"]))
-                    
-                    self._send_discord_alert(
-                        f"🔄 **TRADE CLOSED:** {trade['symbol']} ({trade['action'].upper()})\n"
-                        f"Entry: ${trade['entry_price']:.2f} | Exit: ${trade['close_price']:.2f}\n"
-                        f"PnL: **${trade['realized_pnl']:.2f}** ({trade['result'].upper()})"
-                    )
+                if closed_trades:
+                    self.db.connect()
+                    try:
+                        for trade in closed_trades:
+                            # Log closed trade to DB
+                            self.db.conn.execute("""
+                                INSERT INTO trades (trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (trade["trade_id"], trade["symbol"], trade["action"], trade["entry_time"], trade["entry_price"],
+                                  trade["close_time"], trade["close_price"], trade["size_usd"], trade["realized_pnl"], trade["result"]))
+                            
+                            self._send_discord_alert(
+                                f"🔄 **TRADE CLOSED:** {trade['symbol']} ({trade['action'].upper()})\n"
+                                f"Entry: ${trade['entry_price']:.2f} | Exit: ${trade['close_price']:.2f}\n"
+                                f"PnL: **${trade['realized_pnl']:.2f}** ({trade['result'].upper()})"
+                            )
+                    finally:
+                        self.db.close()
                 
                 # 3. Check for new entry signals
                 for sym in self.symbols:
@@ -110,41 +120,49 @@ class TradingScheduler:
                         continue
                     
                     # Fetch latest 4h candle timestamp
-                    last_candle_ts_res = self.db.conn.execute(
-                        "SELECT timestamp, close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
-                        (sym,)
-                    ).fetchone()
+                    self.db.connect()
+                    try:
+                        last_candle_ts_res = self.db.conn.execute(
+                            "SELECT timestamp, close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
+                            (sym,)
+                        ).fetchone()
+                    finally:
+                        self.db.close()
                     
                     if not last_candle_ts_res:
                         continue
                     
                     last_ts, current_price = last_candle_ts_res
                     
-                    # Generate market snapshot
+                    # Generate market snapshot (internally connects and closes DuckDB)
                     snapshot = self.pipeline.run(sym, last_ts)
                     if not snapshot:
                         continue
                     
-                    # Step 1: Analyst agent evaluation
+                    # Step 1: Analyst agent evaluation (database is fully closed during this slow API call!)
                     analyst_report = self.analyst.analyze(snapshot)
                     
-                    # Step 2: Head Trader decision
+                    # Step 2: Head Trader decision (database is fully closed during this slow API call!)
                     open_positions = self.broker.get_open_positions()
                     proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions)
                     
                     # Step 3: Log decision to database
-                    self.db.conn.execute("""
-                        INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
-                          proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
-                          proposal["reasoning_summary"], json.dumps(snapshot, default=str)))
+                    self.db.connect()
+                    try:
+                        self.db.conn.execute("""
+                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
+                              proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
+                              proposal["reasoning_summary"], json.dumps(snapshot, default=str)))
+                    finally:
+                        self.db.close()
                     
                     if proposal["action"] == "flat":
                         logger.info(f"Head Trader decided FLAT for {sym}. Reasoning: {proposal['reasoning_summary']}")
                         continue
                     
-                    # Step 4: Risk Manager evaluation
+                    # Step 4: Risk Manager evaluation (pipeline._get_candles internally connects and closes DB)
                     df_4h = self.pipeline._get_candles(sym, "4h", last_ts, limit=30)
                     risk_res = self.risk_manager.evaluate_proposal(
                         proposal=proposal,
@@ -157,7 +175,7 @@ class TradingScheduler:
                     )
                     
                     if risk_res["approved"]:
-                        # Submit order to broker
+                        # Submit order to broker (internally connects and closes DuckDB inside PaperBroker)
                         self.broker.submit_order(
                             symbol=sym,
                             action=proposal["action"],
@@ -180,8 +198,6 @@ class TradingScheduler:
                             f"⚠️ **RISK VETO:** Rejected {proposal['action'].upper()} on {sym}.\n"
                             f"Reason: {risk_res['reason']}"
                         )
-                
-                self.db.close()
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")

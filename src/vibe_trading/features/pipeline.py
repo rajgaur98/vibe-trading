@@ -19,106 +19,114 @@ class FeaturePipeline:
         Calculates all features for a given symbol at a specific candle timestamp
         and returns a Pydantic-compatible snapshot dictionary.
         """
-        # Ensure we have connections
-        if not self.db.conn:
-            self.db.connect()
+        self.db.connect()
+        try:
+            # 1. Fetch historical candles up to the target timestamp from DuckDB
+            # We need enough history for indicator warm-ups (e.g. 200 days for 1D, 200 candles for 4h)
+            df_4h = self._get_candles(symbol, "4h", timestamp, limit=300)
+            df_1d = self._get_candles(symbol, "1d", timestamp, limit=300)
 
-        # 1. Fetch historical candles up to the target timestamp from DuckDB
-        # We need enough history for indicator warm-ups (e.g. 200 days for 1D, 200 candles for 4h)
-        df_4h = self._get_candles(symbol, "4h", timestamp, limit=300)
-        df_1d = self._get_candles(symbol, "1d", timestamp, limit=300)
+            if len(df_4h) < 200 or len(df_1d) < 200:
+                logger.warning(f"Not enough candles fetched to calculate features for {symbol} at {timestamp}. Required: 200. Got: 4h={len(df_4h)}, 1d={len(df_1d)}")
+                return {}
 
-        if len(df_4h) < 200 or len(df_1d) < 200:
-            logger.warning(f"Not enough candles fetched to calculate features for {symbol} at {timestamp}. Required: 200. Got: 4h={len(df_4h)}, 1d={len(df_1d)}")
-            return {}
+            # 2. Calculate Indicators for 4h and 1d Timeframes
+            feats_4h = self._calculate_indicators(df_4h)
+            feats_1d = self._calculate_indicators(df_1d)
 
-        # 2. Calculate Indicators for 4h and 1d Timeframes
-        feats_4h = self._calculate_indicators(df_4h)
-        feats_1d = self._calculate_indicators(df_1d)
+            # Get latest rows (the candle being evaluated)
+            latest_4h = feats_4h.iloc[-1]
+            latest_1d = feats_1d.iloc[-1]
 
-        # Get latest rows (the candle being evaluated)
-        latest_4h = feats_4h.iloc[-1]
-        latest_1d = feats_1d.iloc[-1]
-
-        # 3. Detect Support and Resistance levels using scipy.signal.find_peaks
-        sr_levels = self._detect_support_resistance(df_4h)
-        current_price = float(latest_4h['close'])
-        
-        # Calculate support & resistance distances
-        support_price, support_dist_pct, support_proximity = self._get_closest_level(current_price, sr_levels['supports'])
-        resistance_price, resistance_dist_pct, resistance_proximity = self._get_closest_level(current_price, sr_levels['resistances'])
-
-        # 4. Candlestick patterns via TA-Lib
-        candlestick_pattern = self._recognize_candlesticks(df_4h)
-
-        # 5. Fetch Derivatives context
-        derivatives = self.fetcher.fetch_funding_rate_and_oi(symbol)
-
-        # 6. Check macro event
-        # (Simply mock major events or check static calendar. Here we can check calendar day)
-        is_macro_event = self._is_macro_event(timestamp)
-
-        # Assemble the snapshot dictionary (categorizing raw floats to avoid LLM math)
-        snapshot = {
-            "symbol": symbol,
-            "timestamp": timestamp,
-            "open": current_price,  # placeholder or raw values if needed
-            "high": float(latest_4h['high']),
-            "low": float(latest_4h['low']),
-            "close": current_price,
-            "volume": float(latest_4h['volume']),
+            # 3. Detect Support and Resistance levels using scipy.signal.find_peaks
+            sr_levels = self._detect_support_resistance(df_4h)
+            current_price = float(latest_4h['close'])
             
-            # Trend stack features
-            "rsi_14": float(latest_4h['rsi_14']),
-            "rsi_regime": self._get_rsi_regime(latest_4h['rsi_14']),
-            
-            "macd": float(latest_4h['macd']),
-            "macd_signal": float(latest_4h['macd_signal']),
-            "macd_hist": float(latest_4h['macd_hist']),
-            "macd_regime": self._get_macd_regime(latest_4h['macd_hist']),
-            
-            "adx_14": float(latest_4h['adx_14']),
-            "adx_regime": "strong_trend" if latest_4h['adx_14'] >= 25.0 else "weak_trend",
-            
-            "obv": float(latest_4h['obv']),
-            "obv_trend": self._get_obv_trend(feats_4h),
-            
-            # S/R levels
-            "support_price": support_price,
-            "support_distance_pct": support_dist_pct,
-            "support_proximity": support_proximity,
-            
-            "resistance_price": resistance_price,
-            "resistance_distance_pct": resistance_dist_pct,
-            "resistance_proximity": resistance_proximity,
-            
-            # Patterns and macro
-            "candlestick_pattern": candlestick_pattern,
-            "funding_rate": derivatives["funding_rate"],
-            "open_interest_trend": derivatives["open_interest_trend"],
-            "is_macro_event_today": is_macro_event
-        }
+            # Calculate support & resistance distances
+            support_price, support_dist_pct, support_proximity = self._get_closest_level(current_price, sr_levels['supports'])
+            resistance_price, resistance_dist_pct, resistance_proximity = self._get_closest_level(current_price, sr_levels['resistances'])
 
-        return snapshot
+            # 4. Candlestick patterns via TA-Lib
+            candlestick_pattern = self._recognize_candlesticks(df_4h)
+
+            # 5. Fetch Derivatives context
+            derivatives = self.fetcher.fetch_funding_rate_and_oi(symbol)
+
+            # 6. Check macro event
+            # (Simply mock major events or check static calendar. Here we can check calendar day)
+            is_macro_event = self._is_macro_event(timestamp)
+
+            # Assemble the snapshot dictionary (categorizing raw floats to avoid LLM math)
+            snapshot = {
+                "symbol": symbol,
+                "timestamp": timestamp,
+                "open": current_price,  # placeholder or raw values if needed
+                "high": float(latest_4h['high']),
+                "low": float(latest_4h['low']),
+                "close": current_price,
+                "volume": float(latest_4h['volume']),
+                
+                # Trend stack features
+                "rsi_14": float(latest_4h['rsi_14']),
+                "rsi_regime": self._get_rsi_regime(latest_4h['rsi_14']),
+                
+                "macd": float(latest_4h['macd']),
+                "macd_signal": float(latest_4h['macd_signal']),
+                "macd_hist": float(latest_4h['macd_hist']),
+                "macd_regime": self._get_macd_regime(latest_4h['macd_hist']),
+                
+                "adx_14": float(latest_4h['adx_14']),
+                "adx_regime": "strong_trend" if latest_4h['adx_14'] >= 25.0 else "weak_trend",
+                
+                "obv": float(latest_4h['obv']),
+                "obv_trend": self._get_obv_trend(feats_4h),
+                
+                # S/R levels
+                "support_price": support_price,
+                "support_distance_pct": support_dist_pct,
+                "support_proximity": support_proximity,
+                
+                "resistance_price": resistance_price,
+                "resistance_distance_pct": resistance_dist_pct,
+                "resistance_proximity": resistance_proximity,
+                
+                # Patterns and macro
+                "candlestick_pattern": candlestick_pattern,
+                "funding_rate": derivatives["funding_rate"],
+                "open_interest_trend": derivatives["open_interest_trend"],
+                "is_macro_event_today": is_macro_event
+            }
+
+            return snapshot
+        finally:
+            self.db.close()
 
     def _get_candles(self, symbol: str, timeframe: str, timestamp: datetime, limit: int) -> pd.DataFrame:
         """Fetches candles up to a specific timestamp from DuckDB."""
-        # DuckDB query to get historical rows up to our current point in time
-        res = self.db.conn.execute("""
-            SELECT timestamp, open, high, low, close, volume
-            FROM candles
-            WHERE symbol = ? AND timeframe = ? AND timestamp <= ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-        """, (symbol, timeframe, timestamp, limit)).fetchall()
-        
-        if not res:
-            return pd.DataFrame()
+        should_close = False
+        if not self.db.conn:
+            self.db.connect()
+            should_close = True
+        try:
+            # DuckDB query to get historical rows up to our current point in time
+            res = self.db.conn.execute("""
+                SELECT timestamp, open, high, low, close, volume
+                FROM candles
+                WHERE symbol = ? AND timeframe = ? AND timestamp <= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (symbol, timeframe, timestamp, limit)).fetchall()
             
-        # Reverse because we want oldest to newest
-        res.reverse()
-        df = pd.DataFrame(res, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        return df
+            if not res:
+                return pd.DataFrame()
+                
+            # Reverse because we want oldest to newest
+            res.reverse()
+            df = pd.DataFrame(res, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            return df
+        finally:
+            if should_close:
+                self.db.close()
 
     def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Runs standard TA-Lib indicator calculations on the candles."""

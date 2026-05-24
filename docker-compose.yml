@@ -39,3 +39,28 @@ services:
     # Command to run on-demand trade
     command: ["trade-once"]
 
+  vibe-api:
+    build: .
+    container_name: vibe_trading_api
+    restart: unless-stopped
+    ports:
+      - "8008:8000"
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./tests:/app/tests
+    env_file:
+      - .env
+    entrypoint: ["uvicorn", "vibe_trading.web.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  vibe-web:
+    build: ./web
+    container_name: vibe_trading_web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - API_HOST=http://vibe-api:8000
+    depends_on:
+      - vibe-api
+

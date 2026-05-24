@@ -66,19 +66,21 @@ Provide your output strictly matching the Pydantic JSON schema.
             tags=[symbol],
             metadata={"symbol": symbol}
         ):
-            prompt = f"""
-Make a trading decision for {symbol}.
+            prompt = f"""Make a trading decision for {symbol}.
 
 --- Analyst Output ---
-{json.dumps(analyst_output.dict(), indent=2)}
+{json.dumps(analyst_output.dict(), indent=2, default=str)}
 
 --- Historical Analyst Accuracy Scorecard ---
-{json.dumps(scorecard, indent=2)}
+{json.dumps(scorecard, indent=2, default=str)}
 
 --- Current Open Positions ---
-{json.dumps(open_positions, indent=2)}
+{json.dumps(open_positions, indent=2, default=str)}
 
-Synthesize the data and output your final trading proposal.
+--- Rules ---
+- Do not exceed maximum risk allocations.
+- Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
+- Always output a valid schema.
 """
             raw_output = self.client.call_gemini(
                 model_name=self.model,

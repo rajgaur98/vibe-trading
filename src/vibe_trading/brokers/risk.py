@@ -99,7 +99,7 @@ class RiskManager:
 
         # 5. Resolve Take-Profit Price
         tp_strategy = proposal["take_profit_strategy"]
-        rr_ratio = proposal["risk_reward_ratio"]
+        rr_ratio = Decimal(str(proposal["risk_reward_ratio"]))
         
         if tp_strategy == "risk_reward_multiplier":
             tp_dist = sl_dist * rr_ratio
