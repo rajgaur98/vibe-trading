@@ -13,7 +13,7 @@ class RiskManager:
         max_risk_per_trade_pct: float = 0.01,  # Risk 1% of equity per trade
         max_drawdown_pct: float = 0.15,        # 15% Max drawdown circuit breaker
         max_exposure_pct: float = 0.50,        # Max 50% account exposure per asset
-        max_concurrent_trades: int = 3,         # Max 3 open positions at a time
+        max_concurrent_trades: int = 5,         # Max 5 open positions at a time
         maker_fee_pct: float = 0.004,          # Exchange fee buffer (e.g., 0.4% Coinbase Advanced)
         slippage_buffer_pct: float = 0.001     # Slippage buffer (0.1%)
     ):

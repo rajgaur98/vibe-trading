@@ -32,7 +32,7 @@ class HeadTraderOutput(BaseModel):
 class HeadTrader:
     def __init__(self, client: GeminiClient = None):
         self.client = client or GeminiClient()
-        self.model = os.getenv("GEMINI_TRADER_MODEL", "gemini-2.5-flash")
+        self.model = os.getenv("GEMINI_TRADER_MODEL", "gemini-3.1-flash-lite")
         
         self.system_instruction = """
 You are the Head Trader of a systematic crypto hedge fund. 

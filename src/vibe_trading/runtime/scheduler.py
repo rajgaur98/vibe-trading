@@ -19,8 +19,8 @@ from vibe_trading.brokers.coinbase import CoinbaseBroker
 logger = logging.getLogger(__name__)
 
 class TradingScheduler:
-    def __init__(self, symbols: list):
-        self.symbols = symbols
+    def __init__(self, symbols: list = None):
+        self.symbols = symbols or []
         self.db = Database()
         
         # Load correct broker dependency based on TRADING_MODE
@@ -61,23 +61,43 @@ class TradingScheduler:
     @observe()
     def sync_and_evaluate(self):
         """Syncs latest candles, updates broker status, and triggers agent evaluations."""
+        # 1. Resolve trading symbols dynamically
+        is_dynamic = len(self.symbols) == 0
+        if is_dynamic:
+            try:
+                trending_symbols = self.fetcher.fetch_trending_symbols(limit=10)
+            except Exception as e:
+                logger.error(f"Error fetching trending symbols: {e}")
+                trending_symbols = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "NEAR/USDT", "BNB/USDT"]
+        else:
+            trending_symbols = self.symbols
+
+        open_positions = self.broker.get_open_positions()
+        all_active_symbols = list(set(trending_symbols + [pos['symbol'] for pos in open_positions]))
+
+        # 2. Run bootstrapping if needed for any active symbols (ensures warm-up history)
+        try:
+            self.fetcher.bootstrap_if_needed(self.db, all_active_symbols, ["1d", "4h"])
+        except Exception as e:
+            logger.error(f"Error running bootstrap check: {e}")
+
         with propagate_attributes(
             trace_name="ExecutionWindow-sync-and-evaluate",
             tags=["live-tick"],
-            metadata={"symbols": ",".join(self.symbols)}
+            metadata={"symbols": ",".join(all_active_symbols)}
         ):
             now = datetime.utcnow()
             logger.info(f"--- Execution Window: {now.strftime('%Y-%m-%d %H:%M:%S UTC')} ---")
             
             try:
                 # 1. Fetch latest candles and write to DB (internally connects and closes DB)
-                self.fetcher.incremental_update(self.db, self.symbols, ["1d", "4h"], limit=15)
+                self.fetcher.incremental_update(self.db, all_active_symbols, ["1d", "4h"], limit=15)
                 
                 # 2. Update existing broker positions (for OCO fills in paper/sandbox)
                 self.db.connect()
                 current_prices = {}
                 try:
-                    for sym in self.symbols:
+                    for sym in all_active_symbols:
                         price_res = self.db.conn.execute(
                             "SELECT close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
                             (sym,)
@@ -109,9 +129,9 @@ class TradingScheduler:
                         self.db.close()
                 
                 # 3. Check for new entry signals
-                for sym in self.symbols:
-                    # Limit open positions to max portfolio sizing
-                    if len(self.broker.get_open_positions()) >= 3:
+                for sym in trending_symbols:
+                    # Limit open positions to max concurrent portfolio exposure (5 positions)
+                    if len(self.broker.get_open_positions()) >= 5:
                         logger.info("Max concurrent portfolio exposure reached. Skipping new evaluations.")
                         break
                         

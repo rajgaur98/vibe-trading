@@ -57,15 +57,15 @@ def main():
     # 3. Live command
     live_parser = subparsers.add_parser("live", help="Start the live recurring trading scheduler")
     live_parser.add_argument(
-        "--symbols", nargs="+", default=["BTC/USDT", "ETH/USDT"],
-        help="Symbols to monitor and trade"
+        "--symbols", nargs="+", default=None,
+        help="Symbols to monitor and trade (default: dynamic trending coins)"
     )
 
     # 4. Trade-once command (on demand bypass)
     trade_once_parser = subparsers.add_parser("trade-once", help="Trigger a single sync and evaluation window immediately on demand")
     trade_once_parser.add_argument(
-        "--symbols", nargs="+", default=["BTC/USDT", "ETH/USDT"],
-        help="Symbols to monitor and trade"
+        "--symbols", nargs="+", default=None,
+        help="Symbols to monitor and trade (default: dynamic trending coins)"
     )
 
     args = parser.parse_args()

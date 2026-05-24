@@ -24,7 +24,7 @@ class AnalystOutput(BaseModel):
 class TechnicalVolumeAnalyst:
     def __init__(self, client: GeminiClient = None):
         self.client = client or GeminiClient()
-        self.model = os.getenv("GEMINI_ANALYST_MODEL", "gemini-3.5-flash")
+        self.model = os.getenv("GEMINI_ANALYST_MODEL", "gemini-3.1-flash-lite")
         
         self.system_instruction = """
 You are an elite Crypto Technical and Volume Analyst specializing in swing trading. 
