@@ -20,8 +20,8 @@ app.add_middleware(
 
 @contextmanager
 def get_db_conn():
-    """Context manager to yield a temporary read-only DuckDB connection."""
-    db_instance = Database(read_only=True)
+    """Context manager to yield a temporary DuckDB connection."""
+    db_instance = Database(read_only=False)
     db_instance.connect()
     try:
         yield db_instance.conn
