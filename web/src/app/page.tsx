@@ -28,6 +28,32 @@ export default function Dashboard() {
   
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [triggering, setTriggering] = useState(false);
+  const [notification, setNotification] = useState<{ type: "success" | "error" | "info" | null; message: string }>({ type: null, message: "" });
+
+  async function triggerOnDemandTrade() {
+    setTriggering(true);
+    setNotification({ type: "info", message: "Analyzing market and running dynamic trade scan. Please wait..." });
+    try {
+      const res = await fetch("/api/trigger-tick", { method: "POST" });
+      if (res.ok) {
+        await fetchDashboardData();
+        setNotification({ type: "success", message: "On-demand execution tick completed! Check the decisions and positions below." });
+        setTimeout(() => setNotification({ type: null, message: "" }), 6000);
+      } else {
+        const errData = await res.json().catch(() => ({ detail: "Unknown error" }));
+        setNotification({ type: "error", message: `Scan failed: ${errData.detail || "Server error"}` });
+        setTimeout(() => setNotification({ type: null, message: "" }), 8000);
+      }
+    } catch (err) {
+      console.error("Error triggering scan:", err);
+      setNotification({ type: "error", message: "Network error triggering scan." });
+      setTimeout(() => setNotification({ type: null, message: "" }), 6000);
+    } finally {
+      setTriggering(false);
+    }
+  }
+
 
   async function fetchDashboardData() {
     setRefreshing(true);
@@ -71,8 +97,17 @@ export default function Dashboard() {
 
         <div className="flex items-center gap-3">
           <Button
+            onClick={triggerOnDemandTrade}
+            disabled={triggering || refreshing}
+            className="bg-emerald-600 hover:bg-emerald-500 text-slate-100 font-bold gap-2 cursor-pointer transition-colors"
+          >
+            <PlayCircle className={`w-3.5 h-3.5 ${triggering ? "animate-spin" : ""}`} />
+            {triggering ? "Scanning Market..." : "Scan & Trade"}
+          </Button>
+
+          <Button
             onClick={fetchDashboardData}
-            disabled={refreshing}
+            disabled={refreshing || triggering}
             variant="outline"
             className="bg-slate-900/60 border-slate-900 text-slate-300 font-bold hover:bg-slate-900/80 gap-2"
           >
@@ -81,6 +116,24 @@ export default function Dashboard() {
           </Button>
         </div>
       </div>
+
+      {notification.type && (
+        <div className={`p-4 rounded-xl border font-semibold text-sm transition-all duration-300 flex items-center justify-between shadow-lg ${
+          notification.type === "success" 
+            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" 
+            : notification.type === "error" 
+            ? "bg-rose-500/10 border-rose-500/20 text-rose-400" 
+            : "bg-cyan-500/15 border-cyan-500/30 text-cyan-400 animate-pulse"
+        }`}>
+          <span>{notification.message}</span>
+          <button 
+            onClick={() => setNotification({ type: null, message: "" })} 
+            className="text-slate-400 hover:text-slate-200 ml-4 font-bold text-base cursor-pointer"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Metrics Row */}
       <MetricsGrid metrics={metrics} />

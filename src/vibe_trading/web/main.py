@@ -2,9 +2,10 @@ import os
 import json
 from datetime import datetime
 from contextlib import contextmanager
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from vibe_trading.data.db import Database
+from vibe_trading.runtime.scheduler import TradingScheduler
 
 app = FastAPI(title="Vibe Trading API", description="REST endpoints for Vibe Trading Dashboard")
 
@@ -49,6 +50,21 @@ def get_status():
         "database_path": db_path,
         "timestamp": datetime.utcnow().isoformat()
     }
+
+@app.post("/api/trigger-tick")
+def trigger_tick():
+    try:
+        scheduler = TradingScheduler()
+        scheduler.sync_and_evaluate()
+        return {"status": "success", "message": "On-demand execution tick completed."}
+    except Exception as e:
+        err_str = str(e)
+        if "lock" in err_str.lower() or "io error" in err_str.lower():
+            raise HTTPException(
+                status_code=409,
+                detail="Database is currently locked by the background trading daemon. Please wait a few seconds and try again."
+            )
+        raise HTTPException(status_code=500, detail=err_str)
 
 @app.get("/api/metrics")
 def get_metrics():
