@@ -148,3 +148,26 @@ Run unit verification tests using pytest:
 PYTHONPATH=src pytest
 ```
 
+## Eval Harness
+
+Score the analyst + trader prompts against the hand-labeled golden set under `evals/snapshots/`:
+
+```bash
+# Run the eval against the current baseline, prints summary, non-zero exit on regression
+uv run python -m vibe_trading.eval.eval
+
+# After a prompt change you've reviewed and approved:
+uv run python -m vibe_trading.eval.eval --update-baseline
+
+# Use a different judge model (any LiteLLM-compatible identifier)
+EVAL_JUDGE_MODEL=claude-3-5-haiku-20241022 uv run python -m vibe_trading.eval.eval
+```
+
+The golden-set YAMLs live in `evals/snapshots/`. The first two cases are illustrative
+examples — replace their `(symbol, timestamp)` with real DuckDB-backed candles, and add
+30-50 hand-curated cases covering breakouts, fakeouts, ranges, and FOMC reactions to
+make the suite meaningful.
+
+Reports land in `data/reports/eval-<timestamp>.json`. The regression yardstick is
+`evals/baseline.json`, committed to git so prompt-impact diffs are reviewable in PRs.
+

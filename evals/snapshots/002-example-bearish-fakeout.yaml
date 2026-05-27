@@ -1,0 +1,37 @@
+id: 002-example-bearish-fakeout
+description: |
+  EXAMPLE CASE. Replace `(symbol, timestamp)` with real DuckDB-backed candles before
+  treating scores from this case as meaningful.
+
+  This case demonstrates a bearish fakeout: price breaks above resistance on weak
+  volume, immediately rejects, and closes back inside the range with bearish RSI
+  divergence. The correct response is FLAT, not LONG.
+symbol: ETH/USDT
+timestamp: 2026-04-15T04:00:00Z
+
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: divergent
+  nearest_support: 3000.0
+  nearest_resistance: 3400.0
+  confluence_score: 0.45
+  thesis_rubric:
+    must_mention:
+      - failed breakout
+      - bearish divergence
+    must_not_mention:
+      - strong bullish breakout
+      - rising volume confirming the move
+
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: next_resistance
+  risk_reward_ratio: 1.5
+  hold_period_bias: short
+  reasoning_rubric:
+    must_mention:
+      - lack of edge
+      - weak confluence
+    must_not_mention:
+      - enter long despite divergence
