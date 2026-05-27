@@ -1,3 +1,4 @@
+import json
 import os
 import logging
 import litellm
@@ -70,3 +71,56 @@ class LLMClient:
             
         response = litellm.completion(**kwargs)
         return response.choices[0].message.content
+
+    def call_llm_with_tools(
+        self,
+        model_name: str,
+        system_instruction: str,
+        prompt: str,
+        tools: list,
+        tool_executor,
+        max_iterations: int = 10,
+    ) -> str:
+        """Multi-turn agentic loop: LLM proposes tool calls, executor runs them, results fed back.
+
+        Returns the final `assistant.content` string once the model stops emitting tool_calls.
+        Raises RuntimeError if `max_iterations` is exhausted with the model still requesting tools.
+        """
+        model_str = get_litellm_model_string(self.provider, model_name)
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": prompt},
+        ]
+
+        for iteration in range(max_iterations):
+            logger.info(f"Tool-use loop iteration {iteration + 1}/{max_iterations} (model={model_str})")
+            response = litellm.completion(
+                model=model_str,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.1,
+            )
+            assistant_msg = response.choices[0].message
+            messages.append(assistant_msg)
+
+            tool_calls = getattr(assistant_msg, "tool_calls", None)
+            if not tool_calls:
+                return assistant_msg.content
+
+            for tool_call in tool_calls:
+                try:
+                    args = json.loads(tool_call.function.arguments or "{}")
+                except json.JSONDecodeError as e:
+                    args_result = json.dumps({"error": f"Malformed tool arguments: {e}"})
+                else:
+                    logger.info(f"Executing tool: {tool_call.function.name}({args})")
+                    args_result = tool_executor.execute(tool_call.function.name, args)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": args_result,
+                })
+
+        raise RuntimeError(f"Agent exceeded max tool-call iterations ({max_iterations})")

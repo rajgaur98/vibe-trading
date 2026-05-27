@@ -425,3 +425,40 @@ def test_get_derivatives_delegates_to_fetcher():
     assert parsed["funding_rate"] == "0.0123% (neutral)"
     assert parsed["open_interest_trend"] == "5,000,000 USD value (active)"
     fetcher.fetch_funding_rate_and_oi.assert_called_once_with("BTC/USDT")
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_call_llm_with_tools_single_turn(mock_completion):
+    """LLM returns tool_calls once, then a final content message — loop runs twice and returns content."""
+    # Turn 1: model asks for one tool call
+    msg1 = MagicMock()
+    msg1.tool_calls = [MagicMock()]
+    msg1.tool_calls[0].id = "call_1"
+    msg1.tool_calls[0].function.name = "get_market_sentiment"
+    msg1.tool_calls[0].function.arguments = "{}"
+
+    # Turn 2: model returns final JSON content, no tool calls
+    msg2 = MagicMock()
+    msg2.tool_calls = None
+    msg2.content = '{"market_bias": "bullish", "volume_confirmation": "confirmed", "thesis": "ok", "nearest_support": 1.0, "nearest_resistance": 2.0, "confluence_score": 0.5}'
+
+    resp1 = MagicMock(); resp1.choices = [MagicMock(message=msg1)]
+    resp2 = MagicMock(); resp2.choices = [MagicMock(message=msg2)]
+    mock_completion.side_effect = [resp1, resp2]
+
+    tool_executor = MagicMock()
+    tool_executor.execute.return_value = '{"value": 70, "classification": "Greed"}'
+
+    client = LLMClient()
+    result = client.call_llm_with_tools(
+        model_name="test-model",
+        system_instruction="sys",
+        prompt="usr",
+        tools=[{"type": "function", "function": {"name": "get_market_sentiment", "parameters": {}}}],
+        tool_executor=tool_executor,
+    )
+
+    assert "bullish" in result
+    assert mock_completion.call_count == 2
+    tool_executor.execute.assert_called_once_with("get_market_sentiment", {})
