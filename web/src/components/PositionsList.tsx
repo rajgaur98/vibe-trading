@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { RefreshCw, PlayCircle } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Position {
   symbol: string;
@@ -10,28 +11,82 @@ interface Position {
   size_usd: number;
   stop_price: number;
   take_profit_price: number;
+  current_price?: number;
 }
 
 export default function PositionsList({
   positions,
   loading,
+  wsConnected = false,
 }: {
   positions: Position[];
   loading: boolean;
+  wsConnected?: boolean;
 }) {
   return (
     <Card className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl h-full flex flex-col justify-between">
       <div>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
-          <CardTitle className="text-base font-bold text-slate-200">
+          <CardTitle className="text-base font-bold text-slate-200 flex items-center gap-2">
             Active Positions
+            {!loading && positions.length > 0 && (
+              <span
+                className="flex h-2 w-2 relative"
+                title={wsConnected ? "Live Binance ticker connected" : "Live ticker disconnected — showing cached price"}
+              >
+                {wsConnected && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                )}
+                <span
+                  className={`relative inline-flex rounded-full h-2 w-2 ${wsConnected ? "bg-emerald-500" : "bg-slate-600"}`}
+                ></span>
+              </span>
+            )}
           </CardTitle>
           {loading && <RefreshCw className="w-4 h-4 text-slate-500 animate-spin" />}
         </CardHeader>
         <CardContent className="space-y-4 flex-1">
           {loading ? (
-            <div className="py-8 text-center text-slate-500 text-sm font-medium">
-              Loading active positions...
+            <div className="space-y-3">
+              {[...Array(2)].map((_, i) => (
+                <div key={i} className="border border-slate-900/80 rounded-lg bg-slate-950/20 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Skeleton className="h-4 w-16" />
+                      <Skeleton className="h-4 w-12" />
+                    </div>
+                    <Skeleton className="h-3 w-20" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-y-3 gap-x-2">
+                    <div className="space-y-1">
+                      <Skeleton className="h-3 w-12" />
+                      <Skeleton className="h-4 w-16" />
+                    </div>
+                    <div className="space-y-1">
+                      <Skeleton className="h-3 w-16" />
+                      <Skeleton className="h-4 w-14" />
+                    </div>
+                    <div className="space-y-1">
+                      <Skeleton className="h-3 w-16" />
+                      <Skeleton className="h-4 w-16" />
+                    </div>
+                    <div className="space-y-1">
+                      <Skeleton className="h-3 w-16" />
+                      <Skeleton className="h-4 w-20" />
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-slate-900/60 grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Skeleton className="h-3 w-14" />
+                      <Skeleton className="h-3.5 w-16" />
+                    </div>
+                    <div className="space-y-1">
+                      <Skeleton className="h-3 w-14" />
+                      <Skeleton className="h-3.5 w-16" />
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : positions.length === 0 ? (
             <div className="py-8 flex flex-col items-center justify-center text-center text-slate-500 border border-dashed border-slate-900 rounded-lg p-6">
@@ -77,11 +132,17 @@ export default function PositionsList({
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs font-medium">
+                    <div className="grid grid-cols-2 gap-y-3 gap-x-2 text-xs font-medium">
                       <div>
                         <p className="text-slate-500">Entry Price</p>
                         <p className="text-slate-300 font-bold mt-0.5">
-                          ${pos.entry_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          {pos.entry_price > 0 ? `$${pos.entry_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "Pending"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Current Price</p>
+                        <p className="text-slate-300 font-bold mt-0.5">
+                          {pos.current_price ? `$${pos.current_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}` : "N/A"}
                         </p>
                       </div>
                       <div>
@@ -89,6 +150,23 @@ export default function PositionsList({
                         <p className="text-slate-300 font-bold mt-0.5">
                           ${pos.size_usd.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                         </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Unrealized PnL</p>
+                        {pos.entry_price > 0 && pos.current_price ? (() => {
+                          const returnPct = isLong
+                            ? (pos.current_price - pos.entry_price) / pos.entry_price
+                            : (pos.entry_price - pos.current_price) / pos.entry_price;
+                          const pnlUsd = pos.size_usd * returnPct;
+                          const isProfit = pnlUsd >= 0;
+                          return (
+                            <p className={`font-bold mt-0.5 ${isProfit ? "text-emerald-400" : "text-rose-400"}`}>
+                              {isProfit ? "+" : ""}${pnlUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({isProfit ? "+" : ""}{(returnPct * 100).toFixed(2)}%)
+                            </p>
+                          );
+                        })() : (
+                          <p className="text-slate-400 font-bold mt-0.5">-</p>
+                        )}
                       </div>
                     </div>
 

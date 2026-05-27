@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import MetricsGrid from "@/components/MetricsGrid";
 import PositionsList from "@/components/PositionsList";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshCw, PlayCircle, ChevronRight, BrainCircuit } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Decision {
   decision_id: string;
@@ -25,7 +26,10 @@ export default function Dashboard() {
   const [metrics, setMetrics] = useState<any>(null);
   const [positions, setPositions] = useState<any[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
-  
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [wsConnected, setWsConnected] = useState(false);
+  const [wsAttempt, setWsAttempt] = useState(0);
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [triggering, setTriggering] = useState(false);
@@ -81,6 +85,80 @@ export default function Dashboard() {
     const interval = setInterval(fetchDashboardData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Binance miniTicker WebSocket — streams ~1Hz close-price updates for active positions.
+  // Symbols are converted to Binance combined-stream format (e.g. PENGU/USDT -> pengusdt@miniTicker).
+  // Reconnects on disconnect (covers Binance's 24h server-initiated close + transient network drops).
+  const intentionalClose = useRef(false);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (positions.length === 0) {
+      setWsConnected(false);
+      return;
+    }
+
+    // Map: Binance uppercase concatenated symbol (PENGUUSDT) -> original bot symbol (PENGU/USDT)
+    const symbolMap: Record<string, string> = {};
+    positions.forEach((pos) => {
+      const binSymbol = pos.symbol.replace("/", "").toUpperCase();
+      symbolMap[binSymbol] = pos.symbol;
+    });
+
+    const streams = Object.keys(symbolMap)
+      .map((s) => s.toLowerCase() + "@miniTicker")
+      .join("/");
+
+    if (!streams) return;
+
+    intentionalClose.current = false;
+    const ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+
+    ws.onopen = () => setWsConnected(true);
+
+    ws.onmessage = (event) => {
+      try {
+        const parsed = JSON.parse(event.data);
+        const data = parsed.data ?? parsed;
+        if (!data || !data.s || data.c === undefined) return;
+        const originalSymbol = symbolMap[data.s];
+        if (!originalSymbol) return;
+        const price = parseFloat(data.c);
+        if (!Number.isFinite(price)) return;
+        setLivePrices((prev) =>
+          prev[originalSymbol] === price ? prev : { ...prev, [originalSymbol]: price }
+        );
+      } catch (err) {
+        console.error("Binance WS parse error:", err);
+      }
+    };
+
+    ws.onerror = () => setWsConnected(false);
+
+    ws.onclose = () => {
+      setWsConnected(false);
+      if (!intentionalClose.current) {
+        reconnectTimer.current = setTimeout(() => {
+          setWsAttempt((a) => a + 1);
+        }, 5000);
+      }
+    };
+
+    return () => {
+      intentionalClose.current = true;
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+      ws.close();
+    };
+  }, [positions.map((p) => p.symbol).sort().join(","), wsAttempt]);
+
+  // Merge polled positions with live ticker prices for rendering — live overrides stale API value.
+  const positionsWithLivePrice = positions.map((pos) => ({
+    ...pos,
+    current_price: livePrices[pos.symbol] ?? pos.current_price,
+  }));
 
   return (
     <div className="p-8 space-y-8 flex-1">
@@ -144,7 +222,7 @@ export default function Dashboard() {
         <EquityChart metrics={metrics} />
 
         {/* Active Open Positions Panel */}
-        <PositionsList positions={positions} loading={loading} />
+        <PositionsList positions={positionsWithLivePrice} loading={loading} wsConnected={wsConnected} />
       </div>
 
       {/* Recent Decisions Feed */}
@@ -166,8 +244,22 @@ export default function Dashboard() {
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <div className="py-8 text-center text-slate-500 text-sm font-medium">
-              Loading decisions...
+            <div className="divide-y divide-slate-900/60">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="p-6 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Skeleton className="h-4 w-16" />
+                      <Skeleton className="h-4 w-12" />
+                    </div>
+                    <Skeleton className="h-3 w-32" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Skeleton className="h-3.5 w-full" />
+                    <Skeleton className="h-3.5 w-5/6" />
+                  </div>
+                </div>
+              ))}
             </div>
           ) : decisions.length === 0 ? (
             <div className="py-12 text-center text-slate-500 text-sm font-medium">
