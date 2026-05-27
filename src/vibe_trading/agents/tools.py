@@ -194,7 +194,23 @@ class ToolExecutor:
         }
 
     def _get_support_resistance(self, symbol: str) -> dict:
-        raise NotImplementedError
+        ts = self.current_timestamp or datetime.utcnow()
+        df = self.pipeline._get_candles(symbol, "4h", ts, limit=300)
+        if df.empty:
+            return {"error": f"No 4h candles available for {symbol}"}
+        sr = self.pipeline._detect_support_resistance(df)
+        current_price = float(df["close"].iloc[-1])
+        s_price, s_pct, s_prox = self.pipeline._get_closest_level(current_price, sr["supports"])
+        r_price, r_pct, r_prox = self.pipeline._get_closest_level(current_price, sr["resistances"])
+        return {
+            "current_price": current_price,
+            "support_price": s_price,
+            "support_distance_pct": s_pct,
+            "support_proximity": s_prox,
+            "resistance_price": r_price,
+            "resistance_distance_pct": r_pct,
+            "resistance_proximity": r_prox,
+        }
 
     def _get_candlestick_patterns(self, symbol: str) -> dict:
         raise NotImplementedError

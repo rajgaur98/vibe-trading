@@ -340,3 +340,36 @@ def test_get_indicators_returns_error_when_insufficient_candles():
     result_str = executor.execute("get_indicators", {"symbol": "BTC/USDT", "timeframe": "4h"})
     parsed = json.loads(result_str)
     assert "error" in parsed
+
+
+def test_get_support_resistance_returns_levels_and_proximity():
+    """Handler runs scipy-based S/R detection plus proximity calculations."""
+    executor, _, _ = _make_executor()
+    executor.set_timestamp(datetime(2026, 5, 27, 12))
+
+    fake_df = pd.DataFrame({
+        "timestamp": [datetime(2026, 5, 27, h) for h in range(0, 16, 4)],
+        "open": [100.0] * 4,
+        "high": [105.0] * 4,
+        "low": [95.0] * 4,
+        "close": [100.0, 101.0, 102.0, 103.0],
+        "volume": [1000.0] * 4,
+    })
+    executor.pipeline._get_candles = MagicMock(return_value=fake_df)
+    executor.pipeline._detect_support_resistance = MagicMock(
+        return_value={"supports": [95.0], "resistances": [110.0]}
+    )
+
+    result_str = executor.execute("get_support_resistance", {"symbol": "BTC/USDT"})
+    parsed = json.loads(result_str)
+
+    assert parsed["current_price"] == 103.0
+    assert parsed["support_price"] == 95.0
+    assert parsed["resistance_price"] == 110.0
+    assert "support_proximity" in parsed
+    assert "resistance_proximity" in parsed
+
+    # Calls _get_candles for 4h with limit=300
+    call_args = executor.pipeline._get_candles.call_args
+    assert call_args[0][1] == "4h"
+    assert call_args[1]["limit"] == 300
