@@ -145,16 +145,16 @@
 **Files:**
 - Modify: `src/vibe_trading/agents/client.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
   
   We already have the failing test suite in `tests/test_multi_provider.py`. Ensure we are running it.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   
   Run: `uv run pytest tests/test_multi_provider.py`
   Expected: FAIL (assertion or NotImplementedError).
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
   
   Replace the contents of `src/vibe_trading/agents/client.py` with:
   
@@ -233,12 +233,12 @@
           return response.choices[0].message.content
   ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   
   Run: `uv run pytest tests/test_multi_provider.py`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   
   ```bash
   git add src/vibe_trading/agents/client.py
