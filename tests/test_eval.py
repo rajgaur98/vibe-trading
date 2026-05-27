@@ -674,3 +674,116 @@ def test_print_summary_handles_no_baseline_gracefully(capsys):
     out = capsys.readouterr().out
     # Should not mention baseline comparisons
     assert "baseline" not in out.lower() or "no baseline" in out.lower()
+
+
+import json
+from vibe_trading.eval.eval import main
+
+
+@patch("vibe_trading.eval.eval.build_judge")
+@patch("vibe_trading.eval.eval.run_case")
+@patch("vibe_trading.eval.eval.Database")
+@patch("vibe_trading.eval.eval.load_cases")
+def test_main_returns_zero_with_no_baseline(
+    mock_load_cases, mock_db_cls, mock_run_case, mock_build_judge, tmp_path
+):
+    """No baseline file -> exit 0, friendly message, report still written."""
+    case = _load_valid_case()
+    mock_load_cases.return_value = [case]
+    mock_db_cls.return_value = MagicMock()
+    mock_run_case.return_value = _build_perfect_result(case)
+    mock_build_judge.return_value = _passing_judge_stub
+
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    reports = tmp_path / "reports"
+    baseline = tmp_path / "baseline.json"  # does not exist
+
+    rc = main([
+        "--snapshots", str(snapshots),
+        "--baseline", str(baseline),
+        "--reports-dir", str(reports),
+    ])
+    assert rc == 0
+    # A report file should have been written
+    assert any(reports.glob("eval-*.json"))
+
+
+@patch("vibe_trading.eval.eval.build_judge")
+@patch("vibe_trading.eval.eval.run_case")
+@patch("vibe_trading.eval.eval.Database")
+@patch("vibe_trading.eval.eval.load_cases")
+def test_main_returns_one_on_regression(
+    mock_load_cases, mock_db_cls, mock_run_case, mock_build_judge, tmp_path
+):
+    """Baseline says 1.0, current run scores 0.0 on the same case -> exit 1."""
+    case = _load_valid_case()
+    mock_load_cases.return_value = [case]
+    mock_db_cls.return_value = MagicMock()
+
+    # Force a parse failure to drop the score to 0.0
+    from vibe_trading.eval.runner import CaseResult
+    mock_run_case.return_value = CaseResult(
+        case_id=case.id, snapshot_ok=True, analyst_schema_ok=False, error="forced",
+    )
+    mock_build_judge.return_value = _passing_judge_stub
+
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    reports = tmp_path / "reports"
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "overall_score": 1.0,
+        "per_case": {case.id: {"total_score": 1.0, "schema_ok": True}},
+    }))
+
+    rc = main([
+        "--snapshots", str(snapshots),
+        "--baseline", str(baseline),
+        "--reports-dir", str(reports),
+    ])
+    assert rc == 1
+
+
+@patch("vibe_trading.eval.eval.build_judge")
+@patch("vibe_trading.eval.eval.run_case")
+@patch("vibe_trading.eval.eval.Database")
+@patch("vibe_trading.eval.eval.load_cases")
+def test_main_update_baseline_writes_baseline(
+    mock_load_cases, mock_db_cls, mock_run_case, mock_build_judge, tmp_path
+):
+    case = _load_valid_case()
+    mock_load_cases.return_value = [case]
+    mock_db_cls.return_value = MagicMock()
+    mock_run_case.return_value = _build_perfect_result(case)
+    mock_build_judge.return_value = _passing_judge_stub
+
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+    reports = tmp_path / "reports"
+    baseline = tmp_path / "baseline.json"
+
+    rc = main([
+        "--snapshots", str(snapshots),
+        "--baseline", str(baseline),
+        "--reports-dir", str(reports),
+        "--update-baseline",
+    ])
+    assert rc == 0
+    assert baseline.exists()
+    snapshot = json.loads(baseline.read_text())
+    assert case.id in snapshot["per_case"]
+
+
+@patch("vibe_trading.eval.eval.load_cases")
+def test_main_returns_one_when_no_cases_found(mock_load_cases, tmp_path):
+    mock_load_cases.return_value = []
+    snapshots = tmp_path / "snapshots"
+    snapshots.mkdir()
+
+    rc = main([
+        "--snapshots", str(snapshots),
+        "--baseline", str(tmp_path / "baseline.json"),
+        "--reports-dir", str(tmp_path / "reports"),
+    ])
+    assert rc == 1
