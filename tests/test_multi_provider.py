@@ -151,4 +151,28 @@ def test_default_env_load():
         LLMClient()
 
 
+from vibe_trading.agents.tools import ANALYST_TOOLS
 
+def test_analyst_tools_schema_shape():
+    """Verify ANALYST_TOOLS exposes the six expected tools in OpenAI function-calling format."""
+    assert isinstance(ANALYST_TOOLS, list)
+    assert len(ANALYST_TOOLS) == 6
+
+    names = {t["function"]["name"] for t in ANALYST_TOOLS}
+    assert names == {
+        "get_candles",
+        "get_indicators",
+        "get_support_resistance",
+        "get_candlestick_patterns",
+        "get_derivatives",
+        "get_market_sentiment",
+    }
+
+    for tool in ANALYST_TOOLS:
+        assert tool["type"] == "function"
+        fn = tool["function"]
+        assert "name" in fn
+        assert "description" in fn
+        assert "parameters" in fn
+        assert fn["parameters"]["type"] == "object"
+        assert "properties" in fn["parameters"]
