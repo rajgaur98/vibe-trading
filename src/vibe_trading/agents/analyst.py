@@ -1,9 +1,14 @@
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Literal, Optional
+from datetime import datetime
 import json
 import os
 from langfuse import observe, propagate_attributes
 from vibe_trading.agents.client import LLMClient
+from vibe_trading.agents.tools import ANALYST_TOOLS, ToolExecutor
+from vibe_trading.data.db import Database
+from vibe_trading.data.fetcher import DataFetcher
+
 
 class AnalystOutput(BaseModel):
     market_bias: Literal["bullish", "bearish", "neutral"] = Field(
@@ -21,53 +26,102 @@ class AnalystOutput(BaseModel):
         description="A value between 0.0 and 1.0 indicating the ratio of indicators supporting the overall bias."
     )
 
+
 class TechnicalVolumeAnalyst:
-    def __init__(self, client: LLMClient = None):
+    def __init__(
+        self,
+        client: LLMClient = None,
+        db: Database = None,
+        fetcher: DataFetcher = None,
+    ):
         self.client = client or LLMClient()
         provider = self.client.provider
         self.model = os.getenv(f"{provider.upper()}_ANALYST_MODEL") or self.client.model
-        
+
+        self.tool_executor: Optional[ToolExecutor] = (
+            ToolExecutor(db=db, fetcher=fetcher) if db is not None and fetcher is not None else None
+        )
+
         self.system_instruction = """
-You are an elite Crypto Technical and Volume Analyst specializing in swing trading. 
-Your objective is to evaluate a market snapshot and produce a structured technical thesis.
+You are an elite Crypto Technical and Volume Analyst specializing in swing trading.
+Your objective is to evaluate market conditions for a given symbol and produce a structured technical thesis.
 
-Analyze the following inputs:
-1. Trend Structure (Moving averages stacking, ADX strength).
-2. Momentum (RSI values and MACD hist expansions).
-3. Volume Confirmation (OBV trends and volume spike confirmations).
-4. Price Patterns & Candlesticks (Engulfing candles, morning/evening stars near support/resistance).
-5. Derivatives Health (Funding rate limits, open interest trends).
+You have access to six tools that fetch market data on demand. Use them to gather:
+1. Recent OHLCV candles (get_candles) — call separately for the 4h and 1d timeframes to build multi-timeframe context.
+2. Momentum and trend indicators with regime labels (get_indicators) — RSI(14), MACD, ADX(14), OBV, SMA(20/50/200).
+3. Support and resistance levels with proximity (get_support_resistance).
+4. Active candlestick patterns (get_candlestick_patterns).
+5. Derivatives — funding rate and open interest (get_derivatives).
+6. Broader market sentiment — Fear & Greed Index (get_market_sentiment).
 
-Remember the classic Murphy principles:
+Call as many tools as needed to build confluence. Typically you should fetch both 4h and 1d indicators
+plus support/resistance and at least one of derivatives or market sentiment before deciding.
+
+When evaluating the data, apply the classic Murphy principles:
 - Volume must confirm the price trend (rising volume on breakouts, falling volume on pullbacks).
-- Divergences between price and momentum (RSI/MACD) indicate an impending trend exhaustion.
+- Divergences between price and momentum (RSI/MACD) indicate impending trend exhaustion.
 - Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
 
-Provide your output strictly adhering to the requested Pydantic JSON schema.
+When you have enough data, STOP calling tools and respond with a final JSON object that exactly
+matches this schema (no extra text, no tool_calls):
+{
+  "market_bias": "bullish" | "bearish" | "neutral",
+  "volume_confirmation": "confirmed" | "divergent" | "weak",
+  "thesis": "<paragraph summary>",
+  "nearest_support": <float>,
+  "nearest_resistance": <float>,
+  "confluence_score": <0.0..1.0>
+}
 """
 
     @observe()
-    def analyze(self, snapshot: dict) -> AnalystOutput:
-        """Runs the analyst agent over the market snapshot."""
-        symbol = snapshot.get("symbol", "unknown")
+    def analyze(
+        self,
+        symbol: str,
+        timestamp: datetime = None,
+        snapshot: dict = None,
+    ) -> AnalystOutput:
+        """Runs the analyst agent.
+
+        Tool-loop path (preferred): if a ToolExecutor is configured and no snapshot is supplied,
+        the LLM drives data acquisition via tool calls.
+
+        Legacy path: if a snapshot is supplied (or no tool executor is available), the snapshot
+        is rendered inline into the prompt and the single-shot structured call is used.
+        """
         with propagate_attributes(
             trace_name=f"Analyst-analyze-{symbol}",
             tags=[symbol],
-            metadata={"symbol": symbol}
+            metadata={"symbol": symbol},
         ):
-            prompt = f"""
-Analyze the following Market Snapshot for {snapshot['symbol']}:
-{json.dumps(snapshot, indent=2, default=str)}
+            if self.tool_executor is not None and snapshot is None:
+                self.tool_executor.set_timestamp(timestamp)
+                prompt = (
+                    f"Analyze the market for {symbol} as of {timestamp}. "
+                    f"Use the available tools to gather indicators, support/resistance, "
+                    f"candlestick patterns, derivatives, and market sentiment, then "
+                    f"produce the final JSON analysis."
+                )
+                raw_output = self.client.call_llm_with_tools(
+                    model_name=self.model,
+                    system_instruction=self.system_instruction,
+                    prompt=prompt,
+                    tools=ANALYST_TOOLS,
+                    tool_executor=self.tool_executor,
+                )
+            else:
+                prompt = (
+                    f"Analyze the following Market Snapshot for {symbol}:\n"
+                    f"{json.dumps(snapshot, indent=2, default=str)}\n\n"
+                    f"Evaluate all parameters, check for price-volume confirmation or "
+                    f"divergence, and output the analysis."
+                )
+                raw_output = self.client.call_llm(
+                    model_name=self.model,
+                    system_instruction=self.system_instruction,
+                    prompt=prompt,
+                    response_schema=AnalystOutput,
+                )
 
-Evaluate all parameters, check for price-volume confirmation or divergence, and output the analysis.
-"""
-            raw_output = self.client.call_llm(
-                model_name=self.model,
-                system_instruction=self.system_instruction,
-                prompt=prompt,
-                response_schema=AnalystOutput
-            )
-            
-            # Parse the structured response
             data = json.loads(raw_output)
             return AnalystOutput(**data)

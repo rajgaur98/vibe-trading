@@ -1,5 +1,6 @@
 import json
 import pytest
+from datetime import datetime
 from unittest.mock import patch, MagicMock
 from vibe_trading.agents.client import LLMClient, get_litellm_model_string
 
@@ -72,7 +73,7 @@ def test_analyst_integration():
     
     analyst = TechnicalVolumeAnalyst(client=mock_client)
     snapshot = {"symbol": "BTC/USDT"}
-    res = analyst.analyze(snapshot)
+    res = analyst.analyze(symbol="BTC/USDT", snapshot=snapshot)
     
     assert isinstance(res, AnalystOutput)
     assert res.market_bias == "bullish"
@@ -88,7 +89,7 @@ def test_analyst_end_to_end_with_client_mock(mock_completion):
     mock_completion.return_value = mock_response
 
     analyst = TechnicalVolumeAnalyst()
-    res = analyst.analyze({"symbol": "BTC/USDT"})
+    res = analyst.analyze(symbol="BTC/USDT", snapshot={"symbol": "BTC/USDT"})
     
     assert res.market_bias == "bullish"
     mock_completion.assert_called_once()
@@ -545,3 +546,51 @@ def test_call_llm_with_tools_max_iterations(mock_completion):
 
     assert mock_completion.call_count == 3
     assert tool_executor.execute.call_count == 3
+
+
+def _valid_analyst_json():
+    return ('{"market_bias": "bullish", "volume_confirmation": "confirmed", '
+            '"thesis": "ok", "nearest_support": 95.0, "nearest_resistance": 105.0, '
+            '"confluence_score": 0.7}')
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_analyst_tool_use_integration():
+    """When db+fetcher are provided, analyze(symbol, timestamp) uses the tool-loop path."""
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
+    mock_client.call_llm_with_tools.return_value = _valid_analyst_json()
+
+    db = MagicMock()
+    fetcher = MagicMock()
+    analyst = TechnicalVolumeAnalyst(client=mock_client, db=db, fetcher=fetcher)
+
+    ts = datetime(2026, 5, 27, 12)
+    result = analyst.analyze(symbol="BTC/USDT", timestamp=ts)
+
+    assert isinstance(result, AnalystOutput)
+    assert result.market_bias == "bullish"
+
+    # Verify the tool-loop method was invoked (not the legacy call_llm)
+    mock_client.call_llm_with_tools.assert_called_once()
+    mock_client.call_llm.assert_not_called()
+
+    # Verify the tool_executor was pinned to the analyst's timestamp before invocation
+    assert analyst.tool_executor.current_timestamp == ts
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_analyst_legacy_snapshot_fallback():
+    """When no db/fetcher are provided, analyze(snapshot=...) uses the legacy call_llm path."""
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
+    mock_client.call_llm.return_value = _valid_analyst_json()
+
+    analyst = TechnicalVolumeAnalyst(client=mock_client)
+    snapshot = {"symbol": "BTC/USDT", "rsi_14": 55.0}
+    result = analyst.analyze(symbol="BTC/USDT", snapshot=snapshot)
+
+    assert isinstance(result, AnalystOutput)
+    assert result.market_bias == "bullish"
+    mock_client.call_llm.assert_called_once()
+    mock_client.call_llm_with_tools.assert_not_called()
