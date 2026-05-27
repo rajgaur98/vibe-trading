@@ -92,8 +92,8 @@ class BacktestEngine:
                 if not snapshot:
                     continue
 
-                # Get mock or live decision
-                proposal = self._get_decision(sym, snapshot, use_live_agents)
+                # Get mock or live decision (timestamp drives the tool-loop's no-look-ahead cutoff)
+                proposal = self._get_decision(sym, snapshot, ts, use_live_agents)
                 if not proposal or proposal["action"] == "flat":
                     continue
 
@@ -126,36 +126,34 @@ class BacktestEngine:
         # Calculate performance stats
         return self._generate_reports()
 
-    def _get_decision(self, symbol: str, snapshot: dict, use_live_agents: bool) -> dict:
+    def _get_decision(self, symbol: str, snapshot: dict, timestamp: datetime, use_live_agents: bool) -> dict:
         """Helper to return agent proposals. Simulates trading signals deterministically in backtest to save API costs."""
         if use_live_agents:
-            # Import agents on demand
             from vibe_trading.agents.trader import HeadTrader
             from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
-            analyst = TechnicalVolumeAnalyst()
+            from vibe_trading.data.fetcher import DataFetcher
+
+            analyst = TechnicalVolumeAnalyst(db=self.db, fetcher=DataFetcher())
             trader = HeadTrader()
-            
-            # Simple static score card for backtest
+
             scorecard = {"accuracy": 0.55, "total_decisions": 100}
             open_positions = self.broker.get_open_positions()
-            
-            analyst_res = analyst.analyze(snapshot)
+
+            analyst_res = analyst.analyze(symbol=symbol, timestamp=timestamp)
             proposal = trader.decide(symbol, analyst_res, scorecard, open_positions)
             return proposal
         else:
             # Deterministic Mock Trading Agent (Simulates technical vibes)
-            # Bullish: RSI < 40 (oversold/dip buy) OR OBV accumulation + bullish MACD
-            # Bearish: RSI > 70 (overbought)
             rsi = snapshot["rsi_14"]
             obv_trend = snapshot["obv_trend"]
             macd_regime = snapshot["macd_regime"]
-            
+
             action = "flat"
             if rsi < 40 or (obv_trend == "accumulation" and "bullish" in macd_regime):
                 action = "long"
             elif rsi > 70 or (obv_trend == "distribution" and "bearish" in macd_regime):
                 action = "short"
-                
+
             return {
                 "symbol": symbol,
                 "action": action,
@@ -163,7 +161,7 @@ class BacktestEngine:
                 "take_profit_strategy": "risk_reward_multiplier",
                 "risk_reward_ratio": 2.0,
                 "hold_period_bias": "medium",
-                "reasoning_summary": "Mock technical backtest signal"
+                "reasoning_summary": "Mock technical backtest signal",
             }
 
     def _update_and_resolve_brackets(self, timestamp: datetime, current_prices: Dict[str, float]) -> List[dict]:
