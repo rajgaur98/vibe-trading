@@ -1,0 +1,95 @@
+{
+  "baseline_committed_at": "2026-05-27T14:56:31.307588+00:00",
+  "baseline_run_id": "eval-2026-05-27T14-56-31Z",
+  "overall_score": 0.5540945568119481,
+  "analyst_score": 0.6101732406080231,
+  "trader_score": 0.498015873015873,
+  "pass_rate": 0.0,
+  "schema_failures": 0,
+  "per_case": {
+    "001-sol-strong-bullish": {
+      "total_score": 0.5,
+      "analyst_score": 0.5,
+      "trader_score": 0.5,
+      "schema_ok": true
+    },
+    "002-link-strong-bullish": {
+      "total_score": 0.29899046203394003,
+      "analyst_score": 0.09798092406788013,
+      "trader_score": 0.5,
+      "schema_ok": true
+    },
+    "003-pengu-strong-bullish": {
+      "total_score": 0.5833333333333334,
+      "analyst_score": 0.6666666666666666,
+      "trader_score": 0.5,
+      "schema_ok": true
+    },
+    "004-btc-jan-breakout": {
+      "total_score": 0.611111111111111,
+      "analyst_score": 0.7777777777777778,
+      "trader_score": 0.4444444444444444,
+      "schema_ok": true
+    },
+    "005-btc-apr-breakout": {
+      "total_score": 0.5555555555555555,
+      "analyst_score": 0.7777777777777777,
+      "trader_score": 0.3333333333333333,
+      "schema_ok": true
+    },
+    "006-eth-may-bearish": {
+      "total_score": 0.5555555555555556,
+      "analyst_score": 0.4444444444444444,
+      "trader_score": 0.6666666666666666,
+      "schema_ok": true
+    },
+    "007-sol-may-bearish": {
+      "total_score": 0.4861111111111111,
+      "analyst_score": 0.7222222222222222,
+      "trader_score": 0.25,
+      "schema_ok": true
+    },
+    "008-btc-jan-overbought": {
+      "total_score": 0.75,
+      "analyst_score": 1.0,
+      "trader_score": 0.5,
+      "schema_ok": true
+    },
+    "009-btc-may-overbought": {
+      "total_score": 0.611111111111111,
+      "analyst_score": 0.7777777777777778,
+      "trader_score": 0.4444444444444444,
+      "schema_ok": true
+    },
+    "010-btc-jan-oversold": {
+      "total_score": 0.5,
+      "analyst_score": 0.3333333333333333,
+      "trader_score": 0.6666666666666666,
+      "schema_ok": true
+    },
+    "011-eth-jan-oversold": {
+      "total_score": 0.6666666666666666,
+      "analyst_score": 0.6666666666666666,
+      "trader_score": 0.6666666666666666,
+      "schema_ok": true
+    },
+    "012-btc-apr-range": {
+      "total_score": 0.5416666666666666,
+      "analyst_score": 0.6666666666666666,
+      "trader_score": 0.4166666666666667,
+      "schema_ok": true
+    },
+    "013-eth-apr-range": {
+      "total_score": 0.5694444444444444,
+      "analyst_score": 0.7222222222222222,
+      "trader_score": 0.4166666666666667,
+      "schema_ok": true
+    },
+    "014-sui-volume-divergence": {
+      "total_score": 0.5277777777777778,
+      "analyst_score": 0.3888888888888889,
+      "trader_score": 0.6666666666666666,
+      "schema_ok": true
+    }
+  }
+}

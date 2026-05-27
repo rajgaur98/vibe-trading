@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +23,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--reports-dir", type=Path, default=Path("data/reports"))
     parser.add_argument("--update-baseline", action="store_true",
                         help="Overwrite baseline.json with current run scores")
+    parser.add_argument("--throttle-seconds", type=float, default=3.0,
+                        help="Sleep N seconds between cases to stay under LLM-provider rate limits (default: 3.0)")
     args = parser.parse_args(argv)
 
     try:
@@ -38,7 +41,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     judge = build_judge()
 
     case_scores = []
-    for case in cases:
+    for idx, case in enumerate(cases):
+        if idx > 0 and args.throttle_seconds > 0:
+            time.sleep(args.throttle_seconds)
+        logger.info(f"Running case {idx + 1}/{len(cases)}: {case.id}")
         result = run_case(case, db)
         score = score_case(result, case, judge)
         case_scores.append(score)

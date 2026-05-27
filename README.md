@@ -161,13 +161,22 @@ uv run python -m vibe_trading.eval.eval --update-baseline
 
 # Use a different judge model (any LiteLLM-compatible identifier)
 EVAL_JUDGE_MODEL=claude-3-5-haiku-20241022 uv run python -m vibe_trading.eval.eval
+
+# Increase the per-case throttle if you hit provider rate limits
+# (default 3s; raise to 8-10s for rate-limited tiers)
+uv run python -m vibe_trading.eval.eval --throttle-seconds 10
 ```
 
-The golden-set YAMLs live in `evals/snapshots/`. The first two cases are illustrative
-examples — replace their `(symbol, timestamp)` with real DuckDB-backed candles, and add
-30-50 hand-curated cases covering breakouts, fakeouts, ranges, and FOMC reactions to
-make the suite meaningful.
+The golden-set YAMLs live in `evals/snapshots/` — 14 real cases derived from DuckDB
+candle history via `evals/scan_candidates.py` (regime bucketing) and labeled by
+`evals/build_golden_set.py` (deterministic Murphy-rule voting). Both generator scripts
+are committed so the derivation logic is reviewable; rerun them after curating new
+candidate timestamps.
 
-Reports land in `data/reports/eval-<timestamp>.json`. The regression yardstick is
-`evals/baseline.json`, committed to git so prompt-impact diffs are reviewable in PRs.
+Reports land in `data/reports/eval-<timestamp>.json` (gitignored). The regression
+yardstick is `evals/baseline.json`, committed to git so prompt-impact diffs are
+reviewable in PRs. To seed the baseline on a fresh checkout, run with
+`--update-baseline` once — and use `--throttle-seconds 10` if your LLM provider's
+rate limit is tight, otherwise the first few cases may fail with `RateLimitError`
+and pollute the baseline.
 
