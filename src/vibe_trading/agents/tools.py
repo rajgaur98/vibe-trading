@@ -163,7 +163,12 @@ class ToolExecutor:
     # ----- Handler stubs (implemented in later tasks) ---------------------
 
     def _get_candles(self, symbol: str, timeframe: str, limit: int = 20) -> list:
-        raise NotImplementedError
+        limit = min(int(limit), 50)
+        ts = self.current_timestamp or datetime.utcnow()
+        df = self.pipeline._get_candles(symbol, timeframe, ts, limit=limit)
+        if df.empty:
+            return []
+        return df.to_dict(orient="records")
 
     def _get_indicators(self, symbol: str, timeframe: str = "4h") -> dict:
         raise NotImplementedError

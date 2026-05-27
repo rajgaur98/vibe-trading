@@ -256,3 +256,34 @@ def test_get_market_sentiment():
     call_args = mock_urlopen.call_args
     request_obj = call_args[0][0]
     assert "api.alternative.me/fng" in request_obj.full_url
+
+
+import pandas as pd
+from datetime import datetime
+
+def test_get_candles_clamps_limit_and_returns_records():
+    """Handler clamps limit to 50, uses pinned timestamp, returns row dicts as JSON."""
+    executor, _, _ = _make_executor()
+    pinned_ts = datetime(2026, 5, 27, 12, 0, 0)
+    executor.set_timestamp(pinned_ts)
+
+    fake_df = pd.DataFrame([
+        {"timestamp": datetime(2026, 5, 27, 8), "open": 100.0, "high": 105.0, "low": 99.0, "close": 104.0, "volume": 1234.0},
+        {"timestamp": datetime(2026, 5, 27, 12), "open": 104.0, "high": 108.0, "low": 103.0, "close": 107.0, "volume": 2345.0},
+    ])
+    executor.pipeline._get_candles = MagicMock(return_value=fake_df)
+
+    # Request limit=999 -> should clamp to 50 in the call to pipeline._get_candles
+    result_str = executor.execute("get_candles", {"symbol": "BTC/USDT", "timeframe": "4h", "limit": 999})
+    parsed = json.loads(result_str)
+
+    assert isinstance(parsed, list)
+    assert len(parsed) == 2
+    assert parsed[1]["close"] == 107.0
+
+    # Verify clamping + timestamp pin
+    call_args = executor.pipeline._get_candles.call_args
+    assert call_args[0][0] == "BTC/USDT"
+    assert call_args[0][1] == "4h"
+    assert call_args[0][2] == pinned_ts
+    assert call_args[1]["limit"] == 50
