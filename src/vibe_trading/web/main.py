@@ -4,7 +4,7 @@ from datetime import datetime
 from contextlib import contextmanager
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from vibe_trading.data.db import Database
+from vibe_trading.data.db import Database, PostgresDatabase
 from vibe_trading.runtime.scheduler import TradingScheduler
 
 app = FastAPI(title="Vibe Trading API", description="REST endpoints for Vibe Trading Dashboard")
@@ -18,15 +18,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize PostgresDatabase once to set up the shared pool
+_pg_pool_init = PostgresDatabase()
+
 @contextmanager
 def get_db_conn():
-    """Context manager to yield a temporary DuckDB connection."""
-    db_instance = Database(read_only=False)
+    """Context manager to yield a temporary read-only DuckDB connection."""
+    db_instance = Database(read_only=True)
     db_instance.connect()
     try:
         yield db_instance.conn
     finally:
         db_instance.close()
+
+@contextmanager
+def get_pg_conn():
+    """Context manager to yield an independent Postgres connection from the pool.
+    
+    Each call gets its own connection, making this safe for concurrent requests.
+    """
+    pg_instance = PostgresDatabase()
+    pg_instance.connect()
+    try:
+        yield pg_instance.conn
+    finally:
+        pg_instance.close()
 
 @app.get("/api/status")
 def get_status():
@@ -35,7 +51,7 @@ def get_status():
     
     open_count = 0
     db_path = ""
-    with get_db_conn() as conn:
+    with get_pg_conn() as conn:
         db_path = os.getenv("DATABASE_PATH", "data/vibe_trading.db")
         try:
             open_count = conn.execute("SELECT count(*) FROM open_positions").fetchone()[0]
@@ -73,7 +89,7 @@ def get_metrics():
     peak_balance = 10000.0
     equity_curve = []
     
-    with get_db_conn() as conn:
+    with get_pg_conn() as conn:
         try:
             trades = conn.execute("SELECT realized_pnl, result FROM trades").fetchall()
         except Exception:
@@ -134,20 +150,38 @@ def get_metrics():
 @app.get("/api/positions")
 def get_positions():
     positions = []
-    with get_db_conn() as conn:
+    with get_pg_conn() as conn:
         try:
             res = conn.execute(
                 "SELECT symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price FROM open_positions ORDER BY entry_time DESC"
             ).fetchall()
+            
+            # Fetch current prices from DuckDB
+            current_prices = {}
+            try:
+                with get_db_conn() as db_conn:
+                    for r in res:
+                        symbol = r[0]
+                        price_res = db_conn.execute(
+                            "SELECT close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
+                            (symbol,)
+                        ).fetchone()
+                        if price_res:
+                            current_prices[symbol] = price_res[0]
+            except Exception:
+                pass
+
             for r in res:
+                symbol = r[0]
                 positions.append({
-                    "symbol": r[0],
+                    "symbol": symbol,
                     "side": r[1],
                     "entry_time": r[2].isoformat() + "Z" if r[2] else None,
                     "entry_price": r[3],
                     "size_usd": r[4],
                     "stop_price": r[5],
-                    "take_profit_price": r[6]
+                    "take_profit_price": r[6],
+                    "current_price": current_prices.get(symbol)
                 })
         except Exception:
             pass
@@ -156,7 +190,7 @@ def get_positions():
 @app.get("/api/trades")
 def get_trades():
     trades = []
-    with get_db_conn() as conn:
+    with get_pg_conn() as conn:
         try:
             res = conn.execute("""
                 SELECT trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result 
@@ -183,14 +217,14 @@ def get_trades():
 @app.get("/api/decisions")
 def get_decisions(limit: int = 30):
     decisions = []
-    with get_db_conn() as conn:
+    with get_pg_conn() as conn:
         try:
-            res = conn.execute(f"""
+            res = conn.execute("""
                 SELECT decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts 
                 FROM decision_log 
                 ORDER BY timestamp DESC 
-                LIMIT {limit}
-            """).fetchall()
+                LIMIT ?
+            """, (limit,)).fetchall()
             for r in res:
                 try:
                     transcripts = json.loads(r[8]) if r[8] else {}
