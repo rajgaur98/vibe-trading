@@ -76,3 +76,73 @@ def load_cases(snapshots_dir: Path) -> list[EvalCase]:
 
     logger.info(f"Loaded {len(cases)} eval cases from {snapshots_dir}")
     return cases
+
+
+from vibe_trading.agents.analyst import TechnicalVolumeAnalyst, AnalystOutput
+from vibe_trading.agents.trader import HeadTrader
+from vibe_trading.data.db import Database
+from vibe_trading.features.pipeline import FeaturePipeline
+
+
+# Fixed inputs the trader sees in every eval case — keeps trader scoring independent of context.
+FIXED_SCORECARD = {"accuracy": 0.55, "total_decisions": 100}
+FIXED_OPEN_POSITIONS: list = []
+
+
+def run_case(case: EvalCase, db: Database) -> CaseResult:
+    """Run one eval case: build snapshot, run analyst (snapshot path), run trader with LABELED analyst output.
+
+    The trader is intentionally fed `case.analyst_label` instead of the actual analyst output so
+    trader scoring isolates trader-specific regressions from analyst-specific regressions.
+
+    All exceptions are captured onto the result; the function never raises.
+    """
+    pipeline = FeaturePipeline(db)
+    try:
+        snapshot = pipeline.run(case.symbol, case.timestamp)
+    except Exception as e:
+        logger.warning(f"FeaturePipeline.run failed for {case.id}: {e}")
+        return CaseResult(case_id=case.id, snapshot_ok=False, error=f"snapshot build failed: {e}")
+
+    if not snapshot:
+        logger.warning(f"FeaturePipeline.run returned empty snapshot for {case.id} ({case.symbol} @ {case.timestamp})")
+        return CaseResult(case_id=case.id, snapshot_ok=False, error="empty snapshot — insufficient candle history?")
+
+    # Analyst — explicit no db/fetcher so the tool-loop path is NOT taken
+    analyst = TechnicalVolumeAnalyst(db=None, fetcher=None)
+    try:
+        actual_analyst_output = analyst.analyze(symbol=case.symbol, snapshot=snapshot)
+    except Exception as e:
+        logger.warning(f"Analyst failed for {case.id}: {e}")
+        return CaseResult(
+            case_id=case.id, snapshot_ok=True, analyst_schema_ok=False, error=f"analyst failed: {e}",
+        )
+
+    # Convert pydantic to dict for storage; keep parsed object only for the trader stage below
+    analyst_output_dict = actual_analyst_output.model_dump()
+
+    # Trader — fed the LABELED analyst output, not the actual one
+    labeled_analyst_output = AnalystOutput(
+        market_bias=case.analyst_label.market_bias,
+        volume_confirmation=case.analyst_label.volume_confirmation,
+        thesis="(label proxy — see rubric)",
+        nearest_support=case.analyst_label.nearest_support,
+        nearest_resistance=case.analyst_label.nearest_resistance,
+        confluence_score=case.analyst_label.confluence_score,
+    )
+
+    trader = HeadTrader()
+    try:
+        trader_output = trader.decide(case.symbol, labeled_analyst_output, FIXED_SCORECARD, FIXED_OPEN_POSITIONS)
+    except Exception as e:
+        logger.warning(f"Trader failed for {case.id}: {e}")
+        return CaseResult(
+            case_id=case.id, snapshot_ok=True, analyst_schema_ok=True, analyst_output=analyst_output_dict,
+            trader_schema_ok=False, error=f"trader failed: {e}",
+        )
+
+    return CaseResult(
+        case_id=case.id, snapshot_ok=True,
+        analyst_schema_ok=True, analyst_output=analyst_output_dict,
+        trader_schema_ok=True, trader_output=trader_output,
+    )

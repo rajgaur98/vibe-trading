@@ -71,3 +71,133 @@ def test_load_cases_ignores_dotfiles(tmp_path):
     shutil.copy(FIXTURES / "valid-case.yaml", tmp_path / "good.yaml")
     cases = load_cases(tmp_path)
     assert len(cases) == 1
+
+
+from unittest.mock import patch, MagicMock
+from vibe_trading.eval.runner import run_case
+from vibe_trading.agents.analyst import AnalystOutput
+
+
+def _load_valid_case():
+    import yaml
+    from vibe_trading.eval.runner import EvalCase
+    raw = yaml.safe_load((FIXTURES / "valid-case.yaml").read_text())
+    return EvalCase.model_validate(raw)
+
+
+@patch("vibe_trading.eval.runner.HeadTrader")
+@patch("vibe_trading.eval.runner.TechnicalVolumeAnalyst")
+@patch("vibe_trading.eval.runner.FeaturePipeline")
+def test_run_case_invokes_agents_with_snapshot_path(mock_pipeline_cls, mock_analyst_cls, mock_trader_cls):
+    """run_case: builds snapshot via FeaturePipeline, runs analyst on snapshot path, then trader with LABELED analyst output."""
+    case = _load_valid_case()
+    mock_db = MagicMock()
+
+    # FeaturePipeline.run returns a snapshot dict
+    mock_pipeline_cls.return_value.run.return_value = {"symbol": case.symbol, "rsi_14": 55.0}
+
+    # Analyst returns a parsed AnalystOutput
+    actual_analyst = AnalystOutput(
+        market_bias="bullish",
+        volume_confirmation="confirmed",
+        thesis="actual analyst thesis",
+        nearest_support=30050.0,
+        nearest_resistance=32600.0,
+        confluence_score=0.78,
+    )
+    mock_analyst_cls.return_value.analyze.return_value = actual_analyst
+
+    # Trader returns a hydrated proposal dict
+    mock_trader_cls.return_value.decide.return_value = {
+        "decision_id": "deadbeef",
+        "timestamp": case.timestamp,
+        "symbol": case.symbol,
+        "action": "long",
+        "stop_loss_strategy": "1.5_atr",
+        "take_profit_strategy": "next_resistance",
+        "risk_reward_ratio": 2.0,
+        "hold_period_bias": "medium",
+        "reasoning_summary": "actual trader reasoning",
+    }
+
+    result = run_case(case, mock_db)
+
+    assert result.case_id == case.id
+    assert result.snapshot_ok is True
+    assert result.analyst_schema_ok is True
+    assert result.trader_schema_ok is True
+    assert result.analyst_output["market_bias"] == "bullish"
+    assert result.trader_output["action"] == "long"
+    assert result.error is None
+
+    # Analyst is invoked with the snapshot path (no tool-loop): keyword args symbol= and snapshot=
+    analyst_call = mock_analyst_cls.return_value.analyze.call_args
+    assert analyst_call.kwargs["symbol"] == case.symbol
+    assert analyst_call.kwargs["snapshot"]["symbol"] == case.symbol
+
+    # The trader receives the LABELED analyst output (not the actual one)
+    trader_call = mock_trader_cls.return_value.decide.call_args
+    trader_args = trader_call.args
+    fed_analyst_output = trader_args[1]  # signature: (symbol, analyst_output, scorecard, open_positions)
+    assert isinstance(fed_analyst_output, AnalystOutput)
+    assert fed_analyst_output.market_bias == case.analyst_label.market_bias  # "bullish"
+    assert fed_analyst_output.confluence_score == case.analyst_label.confluence_score  # 0.75 (label, not 0.78)
+
+
+@patch("vibe_trading.eval.runner.HeadTrader")
+@patch("vibe_trading.eval.runner.TechnicalVolumeAnalyst")
+@patch("vibe_trading.eval.runner.FeaturePipeline")
+def test_run_case_constructs_analyst_without_db_fetcher(mock_pipeline_cls, mock_analyst_cls, mock_trader_cls):
+    """The analyst is constructed with no db/fetcher so the tool-loop path is NOT taken."""
+    case = _load_valid_case()
+    mock_pipeline_cls.return_value.run.return_value = {"symbol": case.symbol}
+    mock_analyst_cls.return_value.analyze.return_value = AnalystOutput(
+        market_bias="neutral", volume_confirmation="weak", thesis="",
+        nearest_support=0.0, nearest_resistance=0.0, confluence_score=0.0,
+    )
+    mock_trader_cls.return_value.decide.return_value = {
+        "decision_id": "x", "timestamp": case.timestamp, "symbol": case.symbol,
+        "action": "flat", "stop_loss_strategy": "1.5_atr", "take_profit_strategy": "3.0_atr",
+        "risk_reward_ratio": 1.5, "hold_period_bias": "medium", "reasoning_summary": "",
+    }
+
+    run_case(case, MagicMock())
+
+    init_kwargs = mock_analyst_cls.call_args.kwargs
+    assert init_kwargs.get("db") is None
+    assert init_kwargs.get("fetcher") is None
+
+
+@patch("vibe_trading.eval.runner.HeadTrader")
+@patch("vibe_trading.eval.runner.TechnicalVolumeAnalyst")
+@patch("vibe_trading.eval.runner.FeaturePipeline")
+def test_run_case_handles_empty_snapshot(mock_pipeline_cls, mock_analyst_cls, mock_trader_cls):
+    """FeaturePipeline returns {} (insufficient candles) -> snapshot_ok False, agents not invoked."""
+    case = _load_valid_case()
+    mock_pipeline_cls.return_value.run.return_value = {}
+
+    result = run_case(case, MagicMock())
+
+    assert result.snapshot_ok is False
+    assert result.analyst_output is None
+    assert result.trader_output is None
+    mock_analyst_cls.return_value.analyze.assert_not_called()
+    mock_trader_cls.return_value.decide.assert_not_called()
+
+
+@patch("vibe_trading.eval.runner.HeadTrader")
+@patch("vibe_trading.eval.runner.TechnicalVolumeAnalyst")
+@patch("vibe_trading.eval.runner.FeaturePipeline")
+def test_run_case_handles_analyst_exception(mock_pipeline_cls, mock_analyst_cls, mock_trader_cls):
+    """Analyst raises -> error captured on result; trader not invoked."""
+    case = _load_valid_case()
+    mock_pipeline_cls.return_value.run.return_value = {"symbol": case.symbol}
+    mock_analyst_cls.return_value.analyze.side_effect = ValueError("simulated analyst parse failure")
+
+    result = run_case(case, MagicMock())
+
+    assert result.snapshot_ok is True
+    assert result.analyst_schema_ok is False
+    assert result.analyst_output is None
+    assert "simulated analyst parse failure" in result.error
+    mock_trader_cls.return_value.decide.assert_not_called()
