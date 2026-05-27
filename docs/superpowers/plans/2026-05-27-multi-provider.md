@@ -15,7 +15,7 @@
 **Files:**
 - Modify: `pyproject.toml`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
   
   Since this is a package installation step, we verify that `litellm` is importable.
   Create a temporary script `scratch/test_import.py` to check for `litellm` import failure.
@@ -25,12 +25,12 @@
   print("Import success")
   ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   
   Run: `uv run python scratch/test_import.py`
   Expected: Failure with `ModuleNotFoundError: No module named 'litellm'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
   
   Modify `pyproject.toml` to add `litellm>=1.40.0` under project dependencies.
   
@@ -49,13 +49,13 @@
   ```
   Then run `uv sync` to install dependencies.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   
   Run: `uv run python scratch/test_import.py`
   Expected: Output `Import success`
   Remove the temporary file: `rm scratch/test_import.py`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   
   ```bash
   git add pyproject.toml uv.lock
