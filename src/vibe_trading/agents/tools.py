@@ -32,6 +32,9 @@ ANALYST_TOOLS = [
                     "limit": {
                         "type": "integer",
                         "description": "Number of candles to return. Default 20, clamped to max 50.",
+                        "minimum": 1,
+                        "maximum": 50,
+                        "default": 20,
                     },
                 },
                 "required": ["symbol", "timeframe"],
@@ -50,8 +53,8 @@ ANALYST_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "symbol": {"type": "string"},
-                    "timeframe": {"type": "string", "enum": ["4h", "1d"]},
+                    "symbol": {"type": "string", "description": "Trading pair, e.g. 'BTC/USDT'."},
+                    "timeframe": {"type": "string", "enum": ["4h", "1d"], "description": "Candle interval: '4h' or '1d'."},
                 },
                 "required": ["symbol", "timeframe"],
             },
@@ -68,7 +71,7 @@ ANALYST_TOOLS = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"symbol": {"type": "string"}},
+                "properties": {"symbol": {"type": "string", "description": "Trading pair, e.g. 'BTC/USDT'."}},
                 "required": ["symbol"],
             },
         },
@@ -83,7 +86,7 @@ ANALYST_TOOLS = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"symbol": {"type": "string"}},
+                "properties": {"symbol": {"type": "string", "description": "Trading pair, e.g. 'BTC/USDT'."}},
                 "required": ["symbol"],
             },
         },
@@ -98,7 +101,7 @@ ANALYST_TOOLS = [
             ),
             "parameters": {
                 "type": "object",
-                "properties": {"symbol": {"type": "string"}},
+                "properties": {"symbol": {"type": "string", "description": "Trading pair, e.g. 'BTC/USDT'."}},
                 "required": ["symbol"],
             },
         },
