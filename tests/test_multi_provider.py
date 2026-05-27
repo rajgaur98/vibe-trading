@@ -224,8 +224,6 @@ def test_tool_executor_exception_handling():
     assert "simulated DB failure" in parsed["error"]
 
 
-from io import BytesIO
-
 def test_get_market_sentiment():
     """Mock the Fear & Greed Index HTTP endpoint; verify parsing."""
     executor, _, _ = _make_executor()

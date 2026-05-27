@@ -1,7 +1,6 @@
 import json
 import logging
 import urllib.request
-import urllib.error
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -131,6 +130,8 @@ class ToolExecutor:
     """
 
     def __init__(self, db: Database, fetcher: DataFetcher):
+        if db is None or fetcher is None:
+            raise ValueError("ToolExecutor requires non-None db and fetcher")
         self.db = db
         self.fetcher = fetcher
         self.pipeline = FeaturePipeline(db)
@@ -226,7 +227,7 @@ class ToolExecutor:
     def _get_market_sentiment(self) -> dict:
         url = "https://api.alternative.me/fng/?limit=1"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=3) as response:
             payload = json.loads(response.read().decode())
         entry = payload["data"][0]
         return {
