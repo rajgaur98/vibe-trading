@@ -634,3 +634,43 @@ def test_regression_thresholds_exist():
     """Smoke check the constants live where the spec said they would."""
     assert REGRESSION_THRESHOLDS["overall"] == 0.02
     assert REGRESSION_THRESHOLDS["per_case"] == 0.05
+
+
+from vibe_trading.eval.report import print_summary
+
+
+def test_print_summary_includes_key_metrics(capsys):
+    report = SuiteReport.from_scores([_make_score("only", 0.85, analyst=0.83, trader=0.87)])
+    print_summary(report, diff=None)
+    out = capsys.readouterr().out
+
+    assert "Overall score" in out
+    assert "0.85" in out
+    assert "Analyst" in out and "0.83" in out
+    assert "Trader" in out and "0.87" in out
+
+
+def test_print_summary_lists_regressions_and_improvements(capsys):
+    report = SuiteReport.from_scores([_make_score("good", 0.9), _make_score("bad", 0.5)])
+    diff = DiffResult(
+        overall_delta=-0.05,
+        per_case_regressions=["bad"],
+        per_case_improvements=["good"],
+        new_schema_failures=[],
+        is_regression=True,
+    )
+    print_summary(report, diff)
+    out = capsys.readouterr().out
+
+    assert "Per-case regressions" in out
+    assert "bad" in out
+    assert "Per-case improvements" in out
+    assert "good" in out
+
+
+def test_print_summary_handles_no_baseline_gracefully(capsys):
+    report = SuiteReport.from_scores([_make_score("a", 0.7)])
+    print_summary(report, diff=None)
+    out = capsys.readouterr().out
+    # Should not mention baseline comparisons
+    assert "baseline" not in out.lower() or "no baseline" in out.lower()

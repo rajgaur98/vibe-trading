@@ -151,3 +151,45 @@ def diff_against_baseline(report: SuiteReport, baseline: dict) -> DiffResult:
         new_schema_failures=new_schema_failures,
         is_regression=is_regression,
     )
+
+
+def print_summary(report: SuiteReport, diff: Optional[DiffResult]) -> None:
+    """Print a human-readable summary to stdout."""
+    print(f"Eval run: {report.run_id}   ({report.case_count} cases)")
+    print("─" * 60)
+    if diff is None:
+        print(f"Overall score:    {report.overall_score:.2f}   (no baseline)")
+        print(f"  Analyst:        {report.analyst_score:.2f}")
+        print(f"  Trader:         {report.trader_score:.2f}")
+    else:
+        arrow = "▲" if diff.overall_delta > 0 else ("▼" if diff.overall_delta < 0 else "=")
+        print(f"Overall score:    {report.overall_score:.2f}   "
+              f"(delta {diff.overall_delta:+.2f} {arrow})")
+        print(f"  Analyst:        {report.analyst_score:.2f}")
+        print(f"  Trader:         {report.trader_score:.2f}")
+    print(f"Pass rate:        {report.pass_rate * 100:.0f}%")
+    print(f"Schema failures:  {report.schema_failures}")
+    if report.judge_errors > 0:
+        print(f"Judge errors:     {report.judge_errors}")
+    print()
+
+    if diff is not None:
+        if diff.per_case_regressions:
+            print("Per-case regressions (>5% drop):")
+            for case_id in diff.per_case_regressions:
+                print(f"  {case_id}  ▼")
+            print()
+        if diff.new_schema_failures:
+            print("New schema failures:")
+            for case_id in diff.new_schema_failures:
+                print(f"  {case_id}")
+            print()
+        if diff.per_case_improvements:
+            print("Per-case improvements (>5% gain):")
+            for case_id in diff.per_case_improvements:
+                print(f"  {case_id}  ▲")
+            print()
+
+    exit_code = 1 if (diff is not None and diff.is_regression) else 0
+    status = "regression" if exit_code == 1 else "no regressions"
+    print(f"Exit: {exit_code} ({status})")
