@@ -279,3 +279,116 @@ def test_numeric_tolerances_has_all_required_fields():
     assert set(NUMERIC_TOLERANCES.keys()) == {
         "nearest_support", "nearest_resistance", "confluence_score", "risk_reward_ratio",
     }
+
+
+from vibe_trading.eval.scorer import (
+    JudgeOutput, CriterionEvaluation, score_rubric, build_judge,
+)
+from vibe_trading.eval.runner import Rubric
+
+
+def test_score_rubric_all_passed_returns_one():
+    """All criteria pass -> score 1.0."""
+    rubric = Rubric(must_mention=["breakout", "volume"], must_not_mention=["overbought"])
+
+    def stub_judge(text: str, r: Rubric) -> JudgeOutput:
+        return JudgeOutput(
+            must_mention_results=[
+                CriterionEvaluation(criterion="breakout", passed=True, justification="present"),
+                CriterionEvaluation(criterion="volume", passed=True, justification="present"),
+            ],
+            must_not_mention_results=[
+                CriterionEvaluation(criterion="overbought", passed=True, justification="absent"),
+            ],
+        )
+
+    fs = score_rubric("thesis", "actual text", rubric, stub_judge)
+    assert fs.field == "thesis"
+    assert fs.score == 1.0
+    assert fs.passed is True
+
+
+def test_score_rubric_partial_pass():
+    """2/3 criteria pass -> score 2/3."""
+    rubric = Rubric(must_mention=["breakout", "volume"], must_not_mention=["overbought"])
+
+    def stub_judge(text: str, r: Rubric) -> JudgeOutput:
+        return JudgeOutput(
+            must_mention_results=[
+                CriterionEvaluation(criterion="breakout", passed=True, justification=""),
+                CriterionEvaluation(criterion="volume", passed=False, justification="missing"),
+            ],
+            must_not_mention_results=[
+                CriterionEvaluation(criterion="overbought", passed=True, justification=""),
+            ],
+        )
+
+    fs = score_rubric("thesis", "actual text", rubric, stub_judge)
+    assert abs(fs.score - (2 / 3)) < 1e-9
+    assert fs.passed is False
+
+
+def test_score_rubric_empty_rubric_vacuously_passes():
+    """A rubric with no criteria scores 1.0 (vacuous truth)."""
+    rubric = Rubric(must_mention=[], must_not_mention=[])
+
+    def stub_judge(text: str, r: Rubric) -> JudgeOutput:
+        return JudgeOutput(must_mention_results=[], must_not_mention_results=[])
+
+    fs = score_rubric("thesis", "any text", rubric, stub_judge)
+    assert fs.score == 1.0
+    assert fs.passed is True
+
+
+def test_score_rubric_judge_failure_returns_neutral():
+    """If the judge raises, return score 0.5 with judge_error note (doesn't crash the run)."""
+    rubric = Rubric(must_mention=["breakout"], must_not_mention=[])
+
+    def bad_judge(text: str, r: Rubric) -> JudgeOutput:
+        raise RuntimeError("simulated judge timeout")
+
+    fs = score_rubric("thesis", "any text", rubric, bad_judge)
+    assert fs.score == 0.5
+    assert fs.passed is False
+    assert "judge_error" in fs.note
+    assert "simulated judge timeout" in fs.note
+
+
+@patch("vibe_trading.eval.scorer.LLMClient")
+@patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}, clear=False)
+def test_build_judge_uses_default_model_when_env_unset(mock_client_cls):
+    """build_judge() returns a callable that defaults to gemini-3.1-flash-lite when EVAL_JUDGE_MODEL is unset."""
+    import os
+    os.environ.pop("EVAL_JUDGE_MODEL", None)
+
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.call_llm.return_value = (
+        '{"must_mention_results": [{"criterion": "breakout", "passed": true, "justification": "ok"}],'
+        ' "must_not_mention_results": []}'
+    )
+    mock_client_cls.return_value = mock_client
+
+    judge = build_judge()
+    rubric = Rubric(must_mention=["breakout"], must_not_mention=[])
+    out = judge("some text", rubric)
+
+    assert isinstance(out, JudgeOutput)
+    assert out.must_mention_results[0].passed is True
+    # Default model name reached LLMClient
+    call_kwargs = mock_client.call_llm.call_args.kwargs
+    assert call_kwargs["model_name"] == "gemini-3.1-flash-lite"
+
+
+@patch("vibe_trading.eval.scorer.LLMClient")
+@patch.dict("os.environ", {"GEMINI_API_KEY": "test_key", "EVAL_JUDGE_MODEL": "claude-3-5-sonnet-20241022"}, clear=False)
+def test_build_judge_honors_env_override(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.call_llm.return_value = '{"must_mention_results": [], "must_not_mention_results": []}'
+    mock_client_cls.return_value = mock_client
+
+    judge = build_judge()
+    judge("text", Rubric())
+
+    assert mock_client.call_llm.call_args.kwargs["model_name"] == "claude-3-5-sonnet-20241022"
