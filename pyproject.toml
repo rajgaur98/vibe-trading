@@ -9,6 +9,7 @@ dependencies = [
     "ccxt>=4.2.0",
     "duckdb>=0.10.0",
     "google-genai>=0.1.0",
+    "litellm>=1.40.0",
     "quantstats>=0.0.62",
     "apscheduler>=3.10.4",
     "scikit-learn>=1.4.0",
@@ -23,6 +24,7 @@ dependencies = [
     "opentelemetry-sdk",
     "fastapi>=0.136.1",
     "uvicorn>=0.32.0",
+    "psycopg2-binary>=2.9.12",
 ]
 
 [project.optional-dependencies]
