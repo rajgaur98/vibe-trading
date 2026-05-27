@@ -17,6 +17,7 @@ dependencies = [
     "tenacity>=8.2.3",
     "python-dotenv>=1.0.1",
     "pydantic>=2.6.1",
+    "pyyaml>=6.0",
     "TA-Lib>=0.4.28",
     "langfuse>=4.0.0",
     "openinference-instrumentation-google-genai",
