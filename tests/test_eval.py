@@ -488,3 +488,67 @@ def test_score_case_snapshot_failure_propagates():
     assert cs.schema_ok is False
     assert cs.total_score == 0.0
     assert cs.error == "empty snapshot"
+
+
+import json as json_mod
+from vibe_trading.eval.report import SuiteReport, write_report
+from vibe_trading.eval.scorer import CaseScore, FieldScore
+
+
+def _make_score(case_id: str, total: float, analyst: float = None, trader: float = None,
+                schema_ok: bool = True, error: str = None) -> CaseScore:
+    return CaseScore(
+        case_id=case_id, schema_ok=schema_ok, field_scores=[],
+        analyst_score=analyst if analyst is not None else total,
+        trader_score=trader if trader is not None else total,
+        total_score=total, error=error,
+    )
+
+
+def test_suite_report_from_scores_aggregates_means():
+    scores = [_make_score("a", 1.0), _make_score("b", 0.5), _make_score("c", 0.8)]
+    report = SuiteReport.from_scores(scores)
+
+    assert report.case_count == 3
+    assert abs(report.overall_score - (1.0 + 0.5 + 0.8) / 3) < 1e-9
+    assert "a" in report.per_case
+    assert report.per_case["b"].total_score == 0.5
+
+
+def test_suite_report_counts_schema_failures():
+    scores = [_make_score("a", 1.0), _make_score("b", 0.0, schema_ok=False, error="parse")]
+    report = SuiteReport.from_scores(scores)
+    assert report.schema_failures == 1
+
+
+def test_suite_report_pass_rate_only_counts_fully_passing_cases():
+    """pass_rate = fraction of cases where every field passed."""
+    cs_full_pass = CaseScore(
+        case_id="a", schema_ok=True,
+        field_scores=[FieldScore(field="market_bias", passed=True, score=1.0)],
+        analyst_score=1.0, trader_score=1.0, total_score=1.0,
+    )
+    cs_partial = CaseScore(
+        case_id="b", schema_ok=True,
+        field_scores=[
+            FieldScore(field="market_bias", passed=True, score=1.0),
+            FieldScore(field="action", passed=False, score=0.0),
+        ],
+        analyst_score=1.0, trader_score=0.0, total_score=0.5,
+    )
+    report = SuiteReport.from_scores([cs_full_pass, cs_partial])
+    assert report.pass_rate == 0.5
+
+
+def test_write_report_writes_json_file(tmp_path):
+    scores = [_make_score("only-case", 0.85)]
+    report = SuiteReport.from_scores(scores)
+    path = write_report(report, tmp_path)
+
+    assert path.exists()
+    assert path.parent == tmp_path
+    assert path.name.startswith("eval-")
+    assert path.suffix == ".json"
+    data = json_mod.loads(path.read_text())
+    assert data["case_count"] == 1
+    assert data["per_case"]["only-case"]["total_score"] == 0.85
