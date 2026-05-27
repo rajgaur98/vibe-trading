@@ -511,3 +511,37 @@ def test_call_llm_with_tools_multi_turn(mock_completion):
     # Verify order of tool calls
     assert tool_executor.execute.call_args_list[0][0][0] == "get_candles"
     assert tool_executor.execute.call_args_list[1][0][0] == "get_indicators"
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_call_llm_with_tools_max_iterations(mock_completion):
+    """If the LLM never stops requesting tool calls, RuntimeError is raised."""
+    # Always return tool_calls (never a final content)
+    def looping_response(*args, **kwargs):
+        msg = MagicMock()
+        tc = MagicMock()
+        tc.id = "looped"
+        tc.function.name = "get_market_sentiment"
+        tc.function.arguments = "{}"
+        msg.tool_calls = [tc]
+        msg.content = None
+        return MagicMock(choices=[MagicMock(message=msg)])
+    mock_completion.side_effect = looping_response
+
+    tool_executor = MagicMock()
+    tool_executor.execute.return_value = '{"value": 50}'
+
+    client = LLMClient()
+    with pytest.raises(RuntimeError, match="exceeded max tool-call iterations"):
+        client.call_llm_with_tools(
+            model_name="m",
+            system_instruction="sys",
+            prompt="usr",
+            tools=[],
+            tool_executor=tool_executor,
+            max_iterations=3,
+        )
+
+    assert mock_completion.call_count == 3
+    assert tool_executor.execute.call_count == 3
