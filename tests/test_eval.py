@@ -787,3 +787,19 @@ def test_main_returns_one_when_no_cases_found(mock_load_cases, tmp_path):
         "--reports-dir", str(tmp_path / "reports"),
     ])
     assert rc == 1
+
+
+def test_suite_report_pass_rate_excludes_schema_failures():
+    """A case with schema_ok=False and field_scores=[] must NOT count toward pass_rate."""
+    cs_passing = CaseScore(
+        case_id="good", schema_ok=True,
+        field_scores=[FieldScore(field="market_bias", passed=True, score=1.0)],
+        analyst_score=1.0, trader_score=1.0, total_score=1.0,
+    )
+    cs_schema_fail = CaseScore(
+        case_id="broken", schema_ok=False, field_scores=[],
+        analyst_score=0.0, trader_score=0.0, total_score=0.0, error="parse",
+    )
+    report = SuiteReport.from_scores([cs_passing, cs_schema_fail])
+    assert report.pass_rate == 0.5  # 1 of 2 cases passes; the schema-failed one is NOT a pass
+    assert report.schema_failures == 1

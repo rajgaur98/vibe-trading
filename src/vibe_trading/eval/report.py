@@ -35,7 +35,10 @@ class SuiteReport(BaseModel):
         analyst = sum(s.analyst_score for s in scores) / len(scores)
         trader = sum(s.trader_score for s in scores) / len(scores)
         schema_failures = sum(1 for s in scores if not s.schema_ok)
-        pass_rate = sum(1 for s in scores if all(fs.passed for fs in s.field_scores)) / len(scores)
+        pass_rate = sum(
+            1 for s in scores
+            if s.schema_ok and s.field_scores and all(fs.passed for fs in s.field_scores)
+        ) / len(scores)
         judge_errors = sum(
             1 for s in scores
             for fs in s.field_scores
