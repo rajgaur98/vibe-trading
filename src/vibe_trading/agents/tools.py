@@ -213,7 +213,12 @@ class ToolExecutor:
         }
 
     def _get_candlestick_patterns(self, symbol: str) -> dict:
-        raise NotImplementedError
+        ts = self.current_timestamp or datetime.utcnow()
+        df = self.pipeline._get_candles(symbol, "4h", ts, limit=30)
+        if df.empty or len(df) < 5:
+            return {"pattern": "none"}
+        pattern = self.pipeline._recognize_candlesticks(df)
+        return {"pattern": pattern}
 
     def _get_derivatives(self, symbol: str) -> dict:
         raise NotImplementedError

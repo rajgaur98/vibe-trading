@@ -373,3 +373,39 @@ def test_get_support_resistance_returns_levels_and_proximity():
     call_args = executor.pipeline._get_candles.call_args
     assert call_args[0][1] == "4h"
     assert call_args[1]["limit"] == 300
+
+
+def test_get_candlestick_patterns_returns_pattern_string():
+    """Handler invokes TA-Lib pattern recognition on the last 30 4h candles."""
+    executor, _, _ = _make_executor()
+    executor.set_timestamp(datetime(2026, 5, 27, 12))
+
+    fake_df = pd.DataFrame({
+        "timestamp": [datetime(2026, 5, 27, h) for h in range(0, 20, 4)],
+        "open": [100.0, 101.0, 102.0, 103.0, 104.0],
+        "high": [105.0] * 5,
+        "low": [99.0] * 5,
+        "close": [104.0] * 5,
+        "volume": [1000.0] * 5,
+    })
+    executor.pipeline._get_candles = MagicMock(return_value=fake_df)
+    executor.pipeline._recognize_candlesticks = MagicMock(return_value="engulfing_bullish, hammer_bullish")
+
+    result_str = executor.execute("get_candlestick_patterns", {"symbol": "BTC/USDT"})
+    parsed = json.loads(result_str)
+
+    assert parsed["pattern"] == "engulfing_bullish, hammer_bullish"
+
+    # Calls _get_candles for 4h with limit=30
+    call_args = executor.pipeline._get_candles.call_args
+    assert call_args[0][1] == "4h"
+    assert call_args[1]["limit"] == 30
+
+def test_get_candlestick_patterns_returns_none_when_no_data():
+    """Empty candle DF -> pattern 'none'."""
+    executor, _, _ = _make_executor()
+    executor.pipeline._get_candles = MagicMock(return_value=pd.DataFrame())
+
+    result_str = executor.execute("get_candlestick_patterns", {"symbol": "BTC/USDT"})
+    parsed = json.loads(result_str)
+    assert parsed["pattern"] == "none"
