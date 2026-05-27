@@ -392,3 +392,99 @@ def test_build_judge_honors_env_override(mock_client_cls):
     judge("text", Rubric())
 
     assert mock_client.call_llm.call_args.kwargs["model_name"] == "claude-3-5-sonnet-20241022"
+
+
+from vibe_trading.eval.scorer import CaseScore, score_case
+
+
+def _passing_judge_stub(text: str, r: Rubric) -> JudgeOutput:
+    return JudgeOutput(
+        must_mention_results=[
+            CriterionEvaluation(criterion=c, passed=True, justification="ok") for c in r.must_mention
+        ],
+        must_not_mention_results=[
+            CriterionEvaluation(criterion=c, passed=True, justification="ok") for c in r.must_not_mention
+        ],
+    )
+
+
+def _build_perfect_result(case):
+    """Build a CaseResult whose outputs exactly match the labels (perfect score)."""
+    from vibe_trading.eval.runner import CaseResult
+    return CaseResult(
+        case_id=case.id,
+        snapshot_ok=True,
+        analyst_schema_ok=True,
+        analyst_output={
+            "market_bias": case.analyst_label.market_bias,
+            "volume_confirmation": case.analyst_label.volume_confirmation,
+            "thesis": "perfect thesis (judge will pass via stub)",
+            "nearest_support": case.analyst_label.nearest_support,
+            "nearest_resistance": case.analyst_label.nearest_resistance,
+            "confluence_score": case.analyst_label.confluence_score,
+        },
+        trader_schema_ok=True,
+        trader_output={
+            "action": case.trader_label.action,
+            "stop_loss_strategy": case.trader_label.stop_loss_strategy,
+            "take_profit_strategy": case.trader_label.take_profit_strategy,
+            "risk_reward_ratio": case.trader_label.risk_reward_ratio,
+            "hold_period_bias": case.trader_label.hold_period_bias,
+            "reasoning_summary": "perfect reasoning",
+        },
+    )
+
+
+def test_score_case_perfect_match_scores_one():
+    case = _load_valid_case()
+    result = _build_perfect_result(case)
+    cs = score_case(result, case, _passing_judge_stub)
+
+    assert cs.case_id == case.id
+    assert cs.schema_ok is True
+    assert cs.total_score == 1.0
+    assert cs.analyst_score == 1.0
+    assert cs.trader_score == 1.0
+    assert all(fs.passed for fs in cs.field_scores)
+
+
+def test_score_case_schema_failure_short_circuits():
+    """analyst_schema_ok=False -> total_score=0.0, no field scoring attempted."""
+    from vibe_trading.eval.runner import CaseResult
+    case = _load_valid_case()
+    result = CaseResult(
+        case_id=case.id, snapshot_ok=True,
+        analyst_schema_ok=False, analyst_output=None,
+        trader_schema_ok=False, trader_output=None,
+        error="analyst parse failed",
+    )
+    cs = score_case(result, case, _passing_judge_stub)
+    assert cs.schema_ok is False
+    assert cs.total_score == 0.0
+    assert cs.analyst_score == 0.0
+    assert cs.trader_score == 0.0
+    assert cs.error == "analyst parse failed"
+
+
+def test_score_case_one_mismatch_reduces_total():
+    case = _load_valid_case()
+    result = _build_perfect_result(case)
+    # Flip market_bias from label "bullish" to "bearish" -> one field scores 0
+    result.analyst_output["market_bias"] = "bearish"
+
+    cs = score_case(result, case, _passing_judge_stub)
+    # 11 scored fields total (6 analyst incl. thesis, 5 trader incl. reasoning). 1 fails -> 10/11.
+    assert cs.total_score < 1.0
+    assert cs.analyst_score < 1.0
+    assert cs.trader_score == 1.0
+
+
+def test_score_case_snapshot_failure_propagates():
+    """snapshot_ok=False -> total_score=0.0, schema_ok=False, error preserved."""
+    from vibe_trading.eval.runner import CaseResult
+    case = _load_valid_case()
+    result = CaseResult(case_id=case.id, snapshot_ok=False, error="empty snapshot")
+    cs = score_case(result, case, _passing_judge_stub)
+    assert cs.schema_ok is False
+    assert cs.total_score == 0.0
+    assert cs.error == "empty snapshot"

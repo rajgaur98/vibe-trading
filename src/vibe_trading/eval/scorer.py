@@ -153,3 +153,73 @@ def score_rubric(
     score = passed_count / total
     return FieldScore(field=field, passed=(score == 1.0), score=score,
                       note=f"{passed_count}/{total} criteria passed")
+
+
+from vibe_trading.eval.runner import CaseResult, EvalCase
+
+
+class CaseScore(BaseModel):
+    case_id: str
+    schema_ok: bool
+    field_scores: list[FieldScore]
+    analyst_score: float
+    trader_score: float
+    total_score: float
+    error: Optional[str] = None
+
+
+ANALYST_FIELDS = {"market_bias", "volume_confirmation", "nearest_support",
+                  "nearest_resistance", "confluence_score", "thesis"}
+TRADER_FIELDS = {"action", "stop_loss_strategy", "take_profit_strategy",
+                 "risk_reward_ratio", "hold_period_bias", "reasoning_summary"}
+
+
+def score_case(
+    result: CaseResult,
+    case: EvalCase,
+    judge: Callable[[str, Rubric], JudgeOutput],
+) -> CaseScore:
+    """Aggregate per-field scores into a case-level CaseScore.
+
+    Short-circuits to total_score=0.0 if snapshot or schema validation failed for either agent.
+    """
+    if not result.snapshot_ok or not result.analyst_schema_ok or not result.trader_schema_ok:
+        return CaseScore(
+            case_id=result.case_id, schema_ok=False, field_scores=[],
+            analyst_score=0.0, trader_score=0.0, total_score=0.0,
+            error=result.error,
+        )
+
+    field_scores: list[FieldScore] = [
+        # Analyst — categorical
+        score_categorical("market_bias", result.analyst_output["market_bias"], case.analyst_label.market_bias),
+        score_categorical("volume_confirmation", result.analyst_output["volume_confirmation"], case.analyst_label.volume_confirmation),
+        # Analyst — numeric
+        score_numeric_tolerance("nearest_support", result.analyst_output["nearest_support"], case.analyst_label.nearest_support),
+        score_numeric_tolerance("nearest_resistance", result.analyst_output["nearest_resistance"], case.analyst_label.nearest_resistance),
+        score_numeric_tolerance("confluence_score", result.analyst_output["confluence_score"], case.analyst_label.confluence_score),
+        # Analyst — free text
+        score_rubric("thesis", result.analyst_output.get("thesis", ""), case.analyst_label.thesis_rubric, judge),
+        # Trader — categorical
+        score_categorical("action", result.trader_output["action"], case.trader_label.action),
+        score_categorical("stop_loss_strategy", result.trader_output["stop_loss_strategy"], case.trader_label.stop_loss_strategy),
+        score_categorical("take_profit_strategy", result.trader_output["take_profit_strategy"], case.trader_label.take_profit_strategy),
+        score_categorical("hold_period_bias", result.trader_output["hold_period_bias"], case.trader_label.hold_period_bias),
+        # Trader — numeric
+        score_numeric_tolerance("risk_reward_ratio", float(result.trader_output["risk_reward_ratio"]), case.trader_label.risk_reward_ratio),
+        # Trader — free text
+        score_rubric("reasoning_summary", result.trader_output.get("reasoning_summary", ""), case.trader_label.reasoning_rubric, judge),
+    ]
+
+    analyst_field_scores = [fs for fs in field_scores if fs.field in ANALYST_FIELDS]
+    trader_field_scores = [fs for fs in field_scores if fs.field in TRADER_FIELDS]
+
+    analyst_score = sum(fs.score for fs in analyst_field_scores) / len(analyst_field_scores)
+    trader_score = sum(fs.score for fs in trader_field_scores) / len(trader_field_scores)
+    total = sum(fs.score for fs in field_scores) / len(field_scores)
+
+    return CaseScore(
+        case_id=result.case_id, schema_ok=True, field_scores=field_scores,
+        analyst_score=analyst_score, trader_score=trader_score, total_score=total,
+        error=None,
+    )
