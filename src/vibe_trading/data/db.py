@@ -1,7 +1,10 @@
 import os
+import time
 import duckdb
 from pathlib import Path
 import logging
+import psycopg2
+from psycopg2.pool import ThreadedConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -14,23 +17,38 @@ class Database:
         self.read_only = read_only
         self.conn = None
 
-    def connect(self):
-        """Establishes connection to DuckDB."""
+    def connect(self, retries: int = 5, backoff: float = 0.5):
+        """Establishes connection to DuckDB with retry logic for lock contention."""
         if not self.read_only:
             # Ensure the directory exists
             parent_dir = Path(self.db_path).parent
             parent_dir.mkdir(parents=True, exist_ok=True)
-            
-        logger.info(f"Connecting to DuckDB at {self.db_path} (read_only={self.read_only})")
-        self.conn = duckdb.connect(self.db_path, read_only=self.read_only)
         
-        if not self.read_only:
-            self._create_tables()
+        last_err = None
+        for attempt in range(retries):
+            try:
+                logger.info(f"Connecting to DuckDB at {self.db_path} (read_only={self.read_only})")
+                self.conn = duckdb.connect(self.db_path, read_only=self.read_only)
+                
+                if not self.read_only:
+                    self._create_tables()
+                return  # success
+            except duckdb.IOException as e:
+                last_err = e
+                wait = backoff * (2 ** attempt)
+                logger.warning(f"DuckDB lock contention (attempt {attempt + 1}/{retries}), retrying in {wait:.1f}s: {e}")
+                time.sleep(wait)
+        
+        raise last_err  # all retries exhausted
 
     def close(self):
         """Closes the connection."""
         if self.conn:
-            self.conn.close()
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
             logger.info("DuckDB connection closed.")
 
     def _create_tables(self):
@@ -140,3 +158,187 @@ class Database:
         """)
 
         logger.info("Database schemas verified.")
+
+
+def translate_query(sql: str) -> str:
+    """Translates DuckDB SQL dialect to PostgreSQL dialect."""
+    # Replace DuckDB placeholder '?' with PostgreSQL placeholder '%s'
+    sql = sql.replace('?', '%s')
+
+    # Translate dialect-specific commands
+    if "INSERT OR IGNORE INTO decision_log" in sql:
+        sql = sql.replace("INSERT OR IGNORE INTO decision_log", "INSERT INTO decision_log")
+        sql += " ON CONFLICT (decision_id) DO NOTHING"
+    elif "INSERT OR REPLACE INTO open_positions" in sql:
+        sql = sql.replace("INSERT OR REPLACE INTO open_positions", "INSERT INTO open_positions")
+        sql += """ ON CONFLICT (symbol) DO UPDATE SET 
+            side = EXCLUDED.side, 
+            entry_time = EXCLUDED.entry_time, 
+            entry_price = EXCLUDED.entry_price, 
+            size_usd = EXCLUDED.size_usd, 
+            stop_price = EXCLUDED.stop_price, 
+            take_profit_price = EXCLUDED.take_profit_price"""
+    return sql
+
+
+class PostgresConnectionWrapper:
+    """Wraps a psycopg2 connection to mimic DuckDB execution syntax."""
+    def __init__(self, conn):
+        self._conn = conn
+        self._cur = None
+
+    @property
+    def connection(self):
+        return self._conn
+
+    def execute(self, sql: str, params=None):
+        if not self._cur:
+            self._cur = self._conn.cursor()
+        translated_sql = translate_query(sql)
+        self._cur.execute(translated_sql, params)
+        return self._cur
+
+    def fetchone(self):
+        if self._cur:
+            return self._cur.fetchone()
+        return None
+
+    def fetchall(self):
+        if self._cur:
+            return self._cur.fetchall()
+        return []
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        if self._cur:
+            try:
+                self._cur.close()
+            except Exception:
+                pass
+            self._cur = None
+
+
+class PostgresDatabase:
+    """Manages thread-safe connection pool to Supabase Postgres."""
+    _pool = None
+
+    def __init__(self, db_url: str = None):
+        if not db_url:
+            db_url = os.getenv("POSTGRES_URL")
+        if not db_url:
+            raise ValueError("POSTGRES_URL environment variable is not set. Please check your .env file.")
+        
+        self.db_url = db_url
+        self.conn = None
+        self._initialize_pool()
+        self._create_tables()
+
+    def _initialize_pool(self):
+        """Initializes a shared ThreadedConnectionPool."""
+        if PostgresDatabase._pool is None:
+            try:
+                logger.info("Initializing ThreadedConnectionPool to Supabase Postgres...")
+                # Min 1, Max 15 connections
+                PostgresDatabase._pool = ThreadedConnectionPool(1, 15, self.db_url)
+            except Exception as e:
+                logger.error(f"Failed to initialize Postgres connection pool: {e}")
+                raise
+
+    def connect(self):
+        """Acquires a connection from the pool and wraps it."""
+        if self.conn is None:
+            try:
+                raw_conn = PostgresDatabase._pool.getconn()
+                self.conn = PostgresConnectionWrapper(raw_conn)
+                logger.info("Acquired connection from Postgres pool.")
+            except Exception as e:
+                logger.error(f"Failed to get connection from pool: {e}")
+                raise
+
+    def close(self):
+        """Returns the connection back to the pool."""
+        if self.conn:
+            try:
+                # Commit any uncommitted transactions before returning
+                self.conn.commit()
+            except Exception:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+            
+            try:
+                self.conn.close()
+                PostgresDatabase._pool.putconn(self.conn.connection)
+                logger.info("Returned connection to Postgres pool.")
+            except Exception as e:
+                logger.error(f"Error returning connection to pool: {e}")
+            finally:
+                self.conn = None
+
+    def _create_tables(self):
+        """Creates the relational/state tables if they do not exist on Supabase."""
+        self.connect()
+        try:
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS portfolio_state (
+                    timestamp TIMESTAMP PRIMARY KEY,
+                    balance DOUBLE PRECISION,
+                    peak_balance DOUBLE PRECISION
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS open_positions (
+                    symbol VARCHAR PRIMARY KEY,
+                    side VARCHAR,
+                    entry_time TIMESTAMP,
+                    entry_price DOUBLE PRECISION,
+                    size_usd DOUBLE PRECISION,
+                    stop_price DOUBLE PRECISION,
+                    take_profit_price DOUBLE PRECISION
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS trades (
+                    trade_id VARCHAR PRIMARY KEY,
+                    symbol VARCHAR,
+                    action VARCHAR,
+                    entry_time TIMESTAMP,
+                    entry_price DOUBLE PRECISION,
+                    close_time TIMESTAMP,
+                    close_price DOUBLE PRECISION,
+                    size_usd DOUBLE PRECISION,
+                    realized_pnl DOUBLE PRECISION,
+                    result VARCHAR
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS decision_log (
+                    decision_id VARCHAR PRIMARY KEY,
+                    timestamp TIMESTAMP,
+                    symbol VARCHAR,
+                    action VARCHAR,
+                    stop_loss_strategy VARCHAR,
+                    take_profit_strategy VARCHAR,
+                    risk_reward_ratio DOUBLE PRECISION,
+                    reasoning_summary TEXT,
+                    agent_transcripts TEXT
+                )
+            """)
+            self.conn.commit()
+            logger.info("Supabase Postgres tables verified successfully.")
+        except Exception as e:
+            logger.error(f"Failed to verify/create Supabase Postgres tables: {e}")
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            self.close()
+

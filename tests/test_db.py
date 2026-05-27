@@ -30,3 +30,39 @@ def test_database_creation_and_candles_read_write(tmp_path):
     assert res[0] == 50500.0
     
     db.close()
+
+
+def test_postgres_database():
+    from dotenv import load_dotenv
+    load_dotenv()
+    # Only run if POSTGRES_URL is set in environment
+    db_url = os.getenv("POSTGRES_URL")
+    if not db_url:
+        pytest.skip("POSTGRES_URL not set in environment. Skipping Postgres integration test.")
+
+    from vibe_trading.data.db import PostgresDatabase
+    db = PostgresDatabase(db_url=db_url)
+    db.connect()
+
+    # Clean up test symbol if present
+    db.conn.execute("DELETE FROM open_positions WHERE symbol = ?", ("TEST/USDT",))
+    db.conn.commit()
+
+    # Test INSERT using the wrapper
+    db.conn.execute("""
+        INSERT OR REPLACE INTO open_positions (symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, ("TEST/USDT", "long", datetime.utcnow(), 10.0, 100.0, 9.0, 12.0))
+    db.conn.commit()
+
+    # Test SELECT
+    res = db.conn.execute("SELECT side, entry_price FROM open_positions WHERE symbol = ?", ("TEST/USDT",)).fetchone()
+    assert res is not None
+    assert res[0] == "long"
+    assert res[1] == 10.0
+
+    # Clean up
+    db.conn.execute("DELETE FROM open_positions WHERE symbol = ?", ("TEST/USDT",))
+    db.conn.commit()
+    db.close()
+
