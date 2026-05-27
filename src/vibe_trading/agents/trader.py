@@ -3,7 +3,7 @@ from typing import Literal
 import json
 import os
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from langfuse import observe, propagate_attributes
 from vibe_trading.agents.client import LLMClient
@@ -34,7 +34,7 @@ class HeadTrader:
     def __init__(self, client: LLMClient = None):
         self.client = client or LLMClient()
         provider = self.client.provider
-        self.model = os.getenv(f"{provider.upper()}_TRADER_MODEL") or os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
+        self.model = os.getenv(f"{provider.upper()}_TRADER_MODEL") or self.client.model
 
         
         self.system_instruction = """
@@ -72,7 +72,7 @@ Provide your output strictly matching the Pydantic JSON schema.
             prompt = f"""Make a trading decision for {symbol}.
 
 --- Analyst Output ---
-{json.dumps(analyst_output.dict(), indent=2, default=str)}
+{json.dumps(analyst_output.model_dump(), indent=2, default=str)}
 
 --- Historical Analyst Accuracy Scorecard ---
 {json.dumps(scorecard, indent=2, default=str)}
@@ -97,7 +97,7 @@ Provide your output strictly matching the Pydantic JSON schema.
             # Hydrate the final proposal dictionary with system fields (UUID, timestamp)
             proposal = {
                 "decision_id": str(uuid4()),
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc),
                 "symbol": symbol,
                 "action": data["action"],
                 "stop_loss_strategy": data["stop_loss_strategy"],

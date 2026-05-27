@@ -64,6 +64,8 @@ from vibe_trading.agents.analyst import TechnicalVolumeAnalyst, AnalystOutput
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
 def test_analyst_integration():
     mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
     # Mock the raw json response matching AnalystOutput schema
     mock_client.call_llm.return_value = '{"market_bias": "bullish", "volume_confirmation": "confirmed", "thesis": "Strong breakout on high volume.", "nearest_support": 95.0, "nearest_resistance": 105.0, "confluence_score": 0.8}'
     
@@ -99,6 +101,8 @@ from vibe_trading.agents.trader import HeadTrader, HeadTraderOutput
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
 def test_trader_integration():
     mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
     mock_client.call_llm.return_value = '{"action": "long", "stop_loss_strategy": "1.5_atr", "take_profit_strategy": "3.0_atr", "risk_reward_ratio": 2.0, "hold_period_bias": "medium", "reasoning_summary": "Strong trend confirmation."}'
     
     trader = HeadTrader(client=mock_client)
