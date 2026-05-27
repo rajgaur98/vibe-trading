@@ -144,3 +144,11 @@ def test_trader_end_to_end_with_client_mock(mock_completion):
     assert call_kwargs["model"] == "gemini/gemini-3.1-flash-lite"
 
 
+@patch.dict("os.environ", {}, clear=True)
+def test_default_env_load():
+    # If no env vars are defined, initializing LLMClient should raise ValueError about GEMINI_API_KEY
+    with pytest.raises(ValueError, match="GEMINI_API_KEY environment variable is not set"):
+        LLMClient()
+
+
+
