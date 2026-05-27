@@ -59,3 +59,19 @@ def test_call_llm(mock_completion):
         temperature=0.1
     )
 
+from vibe_trading.agents.analyst import TechnicalVolumeAnalyst, AnalystOutput
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_analyst_integration():
+    mock_client = MagicMock()
+    # Mock the raw json response matching AnalystOutput schema
+    mock_client.call_llm.return_value = '{"market_bias": "bullish", "volume_confirmation": "confirmed", "thesis": "Strong breakout on high volume.", "nearest_support": 95.0, "nearest_resistance": 105.0, "confluence_score": 0.8}'
+    
+    analyst = TechnicalVolumeAnalyst(client=mock_client)
+    snapshot = {"symbol": "BTC/USDT"}
+    res = analyst.analyze(snapshot)
+    
+    assert isinstance(res, AnalystOutput)
+    assert res.market_bias == "bullish"
+    mock_client.call_llm.assert_called_once()
+

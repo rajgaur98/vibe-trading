@@ -3,7 +3,7 @@ from typing import Literal
 import json
 import os
 from langfuse import observe, propagate_attributes
-from vibe_trading.agents.client import GeminiClient
+from vibe_trading.agents.client import LLMClient
 
 class AnalystOutput(BaseModel):
     market_bias: Literal["bullish", "bearish", "neutral"] = Field(
@@ -22,9 +22,9 @@ class AnalystOutput(BaseModel):
     )
 
 class TechnicalVolumeAnalyst:
-    def __init__(self, client: GeminiClient = None):
-        self.client = client or GeminiClient()
-        self.model = os.getenv("GEMINI_ANALYST_MODEL", "gemini-3.1-flash-lite")
+    def __init__(self, client: LLMClient = None):
+        self.client = client or LLMClient()
+        self.model = os.getenv("GEMINI_ANALYST_MODEL") or os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
         
         self.system_instruction = """
 You are an elite Crypto Technical and Volume Analyst specializing in swing trading. 
@@ -60,7 +60,7 @@ Analyze the following Market Snapshot for {snapshot['symbol']}:
 
 Evaluate all parameters, check for price-volume confirmation or divergence, and output the analysis.
 """
-            raw_output = self.client.call_gemini(
+            raw_output = self.client.call_llm(
                 model_name=self.model,
                 system_instruction=self.system_instruction,
                 prompt=prompt,
