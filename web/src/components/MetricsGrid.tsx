@@ -1,6 +1,8 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { TrendingUp, TrendingDown, DollarSign, Percent, Award, ShieldAlert } from "lucide-react";
 
+import { Skeleton } from "@/components/ui/skeleton";
+
 interface MetricsData {
   total_trades: number;
   win_rate: number;
@@ -16,32 +18,32 @@ export default function MetricsGrid({ metrics }: { metrics: MetricsData | null }
   const data = [
     {
       title: "Portfolio Balance",
-      value: metrics ? `$${metrics.balance.toLocaleString()}` : "Loading...",
+      value: metrics ? `$${metrics.balance.toLocaleString()}` : <Skeleton className="h-8 w-28" />,
       icon: DollarSign,
-      desc: metrics ? `Peak: $${metrics.peak_balance.toLocaleString()}` : "",
+      desc: metrics ? `Peak: $${metrics.peak_balance.toLocaleString()}` : <Skeleton className="h-3 w-20 mt-1" />,
       iconColor: "text-emerald-400",
       iconBg: "bg-emerald-500/10",
     },
     {
       title: "Total Net Profit",
-      value: metrics ? `${metrics.total_pnl >= 0 ? "+" : ""}$${metrics.total_pnl.toLocaleString()}` : "Loading...",
+      value: metrics ? `${metrics.total_pnl >= 0 ? "+" : ""}$${metrics.total_pnl.toLocaleString()}` : <Skeleton className="h-8 w-28" />,
       icon: metrics && metrics.total_pnl >= 0 ? TrendingUp : TrendingDown,
-      desc: metrics ? `Total Trades: ${metrics.total_trades}` : "",
+      desc: metrics ? `Total Trades: ${metrics.total_trades}` : <Skeleton className="h-3 w-20 mt-1" />,
       iconColor: metrics && metrics.total_pnl >= 0 ? "text-emerald-400" : "text-rose-400",
       iconBg: metrics && metrics.total_pnl >= 0 ? "bg-emerald-500/10" : "bg-rose-500/10",
       textColor: metrics ? (metrics.total_pnl >= 0 ? "text-emerald-400" : "text-rose-400") : "",
     },
     {
       title: "Win Rate",
-      value: metrics ? `${metrics.win_rate}%` : "Loading...",
+      value: metrics ? `${metrics.win_rate}%` : <Skeleton className="h-8 w-16" />,
       icon: Percent,
-      desc: metrics ? `Profit Factor: ${metrics.profit_factor}` : "",
+      desc: metrics ? `Profit Factor: ${metrics.profit_factor}` : <Skeleton className="h-3 w-20 mt-1" />,
       iconColor: "text-cyan-400",
       iconBg: "bg-cyan-500/10",
     },
     {
       title: "Max Drawdown",
-      value: metrics ? `${metrics.drawdown.toFixed(2)}%` : "Loading...",
+      value: metrics ? `${metrics.drawdown.toFixed(2)}%` : <Skeleton className="h-8 w-16" />,
       icon: ShieldAlert,
       desc: "Relative to peak equity",
       iconColor: "text-amber-400",

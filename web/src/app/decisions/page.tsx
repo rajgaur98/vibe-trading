@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Brain, RefreshCw, Calendar, ArrowRight, BarChart4, Cpu } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Decision {
   decision_id: string;
@@ -70,8 +71,37 @@ export default function Decisions() {
 
       {/* Decisions Timeline */}
       {loading ? (
-        <div className="py-12 text-center text-slate-500 text-sm font-medium">
-          Loading decision log...
+        <div className="space-y-6">
+          {[...Array(3)].map((_, i) => (
+            <Card
+              key={i}
+              className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl overflow-hidden"
+            >
+              <div className="p-6 border-b border-slate-900 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-5 w-24 animate-pulse" />
+                    <Skeleton className="h-5 w-14 animate-pulse" />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="h-3.5 w-32 animate-pulse" />
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <Skeleton className="h-10 w-24 rounded-lg animate-pulse" />
+                  <Skeleton className="h-10 w-24 rounded-lg animate-pulse" />
+                  <Skeleton className="h-10 w-16 rounded-lg animate-pulse" />
+                </div>
+              </div>
+              <CardContent className="p-6 space-y-4">
+                <div className="space-y-2">
+                  <Skeleton className="h-3 w-32 animate-pulse" />
+                  <Skeleton className="h-3.5 w-full animate-pulse" />
+                  <Skeleton className="h-3.5 w-5/6 animate-pulse" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
       ) : decisions.length === 0 ? (
         <Card className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl p-8 text-center text-slate-500 text-sm">

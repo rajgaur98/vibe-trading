@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { History, RefreshCw, TrendingUp, TrendingDown, Landmark, Percent } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface Trade {
   trade_id: string;
@@ -230,8 +231,40 @@ export default function Trades() {
         </CardHeader>
         <CardContent className="p-0">
           {loading ? (
-            <div className="py-8 text-center text-slate-500 text-sm font-medium">
-              Loading trade logs...
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader className="bg-slate-950/40 border-b border-slate-900/80">
+                  <TableRow className="border-b-0">
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs">Symbol</TableHead>
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs">Side</TableHead>
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs">Entry Price</TableHead>
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs">Close Price</TableHead>
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs">Position Size</TableHead>
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs">PnL ($)</TableHead>
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs">Execution Times</TableHead>
+                    <TableHead className="text-slate-400 font-bold h-11 text-xs text-right">Result</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="divide-y divide-slate-900/60 font-semibold text-xs text-slate-300">
+                  {[...Array(5)].map((_, i) => (
+                    <TableRow key={i} className="border-b-0">
+                      <TableCell><Skeleton className="h-4 w-16 animate-pulse" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-12 animate-pulse" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-16 animate-pulse" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-16 animate-pulse" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-16 animate-pulse" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-16 animate-pulse" /></TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <Skeleton className="h-3.5 w-28 animate-pulse" />
+                          <Skeleton className="h-3.5 w-28 animate-pulse" />
+                        </div>
+                      </TableCell>
+                      <TableCell className="flex justify-end pt-3"><Skeleton className="h-4 w-12 animate-pulse" /></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
           ) : filteredTrades.length === 0 ? (
             <div className="py-12 text-center text-slate-500 text-sm font-medium">
