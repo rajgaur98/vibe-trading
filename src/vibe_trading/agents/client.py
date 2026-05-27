@@ -102,7 +102,10 @@ class LLMClient:
                 temperature=0.1,
             )
             assistant_msg = response.choices[0].message
-            messages.append(assistant_msg)
+            if hasattr(assistant_msg, "model_dump"):
+                messages.append(assistant_msg.model_dump())
+            else:
+                messages.append(dict(assistant_msg))
 
             tool_calls = getattr(assistant_msg, "tool_calls", None)
             if not tool_calls:
@@ -119,7 +122,7 @@ class LLMClient:
 
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": tool_call.id,
+                    "tool_call_id": getattr(tool_call, "id", "") or "",
                     "content": args_result,
                 })
 

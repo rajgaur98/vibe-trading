@@ -595,3 +595,44 @@ def test_analyst_legacy_snapshot_fallback():
     assert result.market_bias == "bullish"
     mock_client.call_llm.assert_called_once()
     mock_client.call_llm_with_tools.assert_not_called()
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_call_llm_with_tools_malformed_args(mock_completion):
+    """Malformed JSON in tool_call.function.arguments yields an error tool result, loop continues."""
+    msg1 = MagicMock()
+    msg1.tool_calls = [MagicMock()]
+    msg1.tool_calls[0].id = "call_bad"
+    msg1.tool_calls[0].function.name = "get_candles"
+    msg1.tool_calls[0].function.arguments = "{not valid json"
+
+    msg2 = MagicMock()
+    msg2.tool_calls = None
+    msg2.content = '{"market_bias": "neutral"}'
+
+    mock_completion.side_effect = [
+        MagicMock(choices=[MagicMock(message=msg1)]),
+        MagicMock(choices=[MagicMock(message=msg2)]),
+    ]
+
+    tool_executor = MagicMock()
+    client = LLMClient()
+    result = client.call_llm_with_tools(
+        model_name="m",
+        system_instruction="sys",
+        prompt="usr",
+        tools=[],
+        tool_executor=tool_executor,
+    )
+
+    # Loop completed; executor was never invoked (args failed to parse)
+    assert "neutral" in result
+    tool_executor.execute.assert_not_called()
+    # Second LLM call must include a tool message with an error payload
+    second_call_messages = mock_completion.call_args_list[1][1]["messages"]
+    tool_msgs = [m for m in second_call_messages if isinstance(m, dict) and m.get("role") == "tool"]
+    assert len(tool_msgs) == 1
+    parsed = json.loads(tool_msgs[0]["content"])
+    assert "error" in parsed
+    assert "Malformed tool arguments" in parsed["error"]
