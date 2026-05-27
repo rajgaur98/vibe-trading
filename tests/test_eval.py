@@ -355,12 +355,9 @@ def test_score_rubric_judge_failure_returns_neutral():
 
 
 @patch("vibe_trading.eval.scorer.LLMClient")
-@patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}, clear=False)
+@patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}, clear=True)
 def test_build_judge_uses_default_model_when_env_unset(mock_client_cls):
     """build_judge() returns a callable that defaults to gemini-3.1-flash-lite when EVAL_JUDGE_MODEL is unset."""
-    import os
-    os.environ.pop("EVAL_JUDGE_MODEL", None)
-
     mock_client = MagicMock()
     mock_client.provider = "gemini"
     mock_client.call_llm.return_value = (
@@ -375,7 +372,6 @@ def test_build_judge_uses_default_model_when_env_unset(mock_client_cls):
 
     assert isinstance(out, JudgeOutput)
     assert out.must_mention_results[0].passed is True
-    # Default model name reached LLMClient
     call_kwargs = mock_client.call_llm.call_args.kwargs
     assert call_kwargs["model_name"] == "gemini-3.1-flash-lite"
 
