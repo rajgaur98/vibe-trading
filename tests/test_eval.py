@@ -356,10 +356,14 @@ def test_score_rubric_judge_failure_returns_neutral():
 
 @patch("vibe_trading.eval.scorer.LLMClient")
 @patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"}, clear=True)
-def test_build_judge_uses_default_model_when_env_unset(mock_client_cls):
-    """build_judge() returns a callable that defaults to gemini-3.1-flash-lite when EVAL_JUDGE_MODEL is unset."""
+def test_build_judge_defaults_to_client_model_when_env_unset(mock_client_cls):
+    """With EVAL_JUDGE_MODEL unset, the judge inherits LLMClient.model so it always
+    targets the currently-configured provider (no risk of pointing at a Gemini
+    model when LLM_PROVIDER=groq).
+    """
     mock_client = MagicMock()
     mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
     mock_client.call_llm.return_value = (
         '{"must_mention_results": [{"criterion": "breakout", "passed": true, "justification": "ok"}],'
         ' "must_not_mention_results": []}'
@@ -374,6 +378,27 @@ def test_build_judge_uses_default_model_when_env_unset(mock_client_cls):
     assert out.must_mention_results[0].passed is True
     call_kwargs = mock_client.call_llm.call_args.kwargs
     assert call_kwargs["model_name"] == "gemini-3.1-flash-lite"
+
+
+@patch("vibe_trading.eval.scorer.LLMClient")
+@patch.dict("os.environ", {"GROQ_API_KEY": "test_key"}, clear=True)
+def test_build_judge_defaults_to_client_model_under_groq(mock_client_cls):
+    """Regression guard for the swap from a hardcoded gemini default to client.model
+    inheritance — under LLM_PROVIDER=groq the judge must target the Groq model,
+    not a Gemini one.
+    """
+    mock_client = MagicMock()
+    mock_client.provider = "groq"
+    mock_client.model = "llama-3.3-70b-versatile"
+    mock_client.call_llm.return_value = (
+        '{"must_mention_results": [], "must_not_mention_results": []}'
+    )
+    mock_client_cls.return_value = mock_client
+
+    judge = build_judge()
+    judge("text", Rubric())
+
+    assert mock_client.call_llm.call_args.kwargs["model_name"] == "llama-3.3-70b-versatile"
 
 
 @patch("vibe_trading.eval.scorer.LLMClient")

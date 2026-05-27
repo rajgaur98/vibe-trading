@@ -50,8 +50,11 @@ class LLMClient:
             raise ValueError(f"{required_key} environment variable is not set. Please check your .env file.")
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        # 5 attempts with backoff 4 → 8 → 16 → 32 → 60s ≈ 120s total max wait —
+        # enough to outlast a typical 60s rate-limit bucket refill on free tiers
+        # (Gemini Flash Lite, Groq Llama 70B) without giving up on transient failures.
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2, min=4, max=60),
         retry=retry_if_exception_type(Exception),
         before_sleep=lambda retry_state: logger.warning(
             f"LLM request failed. Retrying in {retry_state.next_action.sleep} seconds... (Attempt {retry_state.attempt_number})"

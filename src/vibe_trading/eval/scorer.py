@@ -97,18 +97,18 @@ Output strictly matches the JudgeOutput JSON schema. Provide a one-sentence just
 criterion.
 """.strip()
 
-_DEFAULT_JUDGE_MODEL = "gemini-3.1-flash-lite"
-
-
 def build_judge() -> Callable[[str, Rubric], JudgeOutput]:
     """Returns a closure that, given (actual_text, rubric), calls an LLM judge and parses its output.
 
-    Judge model is resolved per call from the EVAL_JUDGE_MODEL env var, defaulting to gemini-3.1-flash-lite.
+    Judge model is resolved per call from the `EVAL_JUDGE_MODEL` env var. When unset,
+    falls back to the LLMClient's configured model — guarantees the judge always
+    targets the active provider (so switching `LLM_PROVIDER` from gemini to groq
+    doesn't leave the judge pointing at a model the new provider doesn't host).
     """
     client = LLMClient()
 
     def judge(actual_text: str, rubric: Rubric) -> JudgeOutput:
-        model_name = os.getenv("EVAL_JUDGE_MODEL", _DEFAULT_JUDGE_MODEL)
+        model_name = os.getenv("EVAL_JUDGE_MODEL") or client.model
         prompt = "TEXT:\n" + actual_text + "\n\nRUBRIC:\nMUST MENTION:\n"
         prompt += "\n".join(f"- {c}" for c in rubric.must_mention) if rubric.must_mention else "(none)"
         prompt += "\n\nMUST NOT MENTION:\n"

@@ -24,8 +24,9 @@ def test_llm_client_initialization_groq_missing_key():
     with pytest.raises(ValueError, match="GROQ_API_KEY environment variable is not set"):
         LLMClient()
 
-@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"}, clear=True)
 def test_llm_client_initialization_gemini():
+    """With LLM_MODEL unset, LLMClient falls back to the hardcoded default."""
     client = LLMClient()
     assert client.provider == "gemini"
     assert client.model == "gemini-3.1-flash-lite"
