@@ -1,0 +1,30 @@
+id: fixture-001-bullish
+description: |
+  Synthetic test fixture for loader unit tests. Not a real market event.
+symbol: BTC/USDT
+timestamp: 2026-05-22T04:00:00Z
+
+analyst_label:
+  market_bias: bullish
+  volume_confirmation: confirmed
+  nearest_support: 30100.0
+  nearest_resistance: 32500.0
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+      - breakout above resistance
+      - rising volume
+    must_not_mention:
+      - overbought warning
+
+trader_label:
+  action: long
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: next_resistance
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+      - breakout
+    must_not_mention:
+      - risk aversion
