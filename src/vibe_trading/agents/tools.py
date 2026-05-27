@@ -221,7 +221,7 @@ class ToolExecutor:
         return {"pattern": pattern}
 
     def _get_derivatives(self, symbol: str) -> dict:
-        raise NotImplementedError
+        return self.fetcher.fetch_funding_rate_and_oi(symbol)
 
     def _get_market_sentiment(self) -> dict:
         url = "https://api.alternative.me/fng/?limit=1"

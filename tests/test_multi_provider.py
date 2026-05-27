@@ -409,3 +409,19 @@ def test_get_candlestick_patterns_returns_none_when_no_data():
     result_str = executor.execute("get_candlestick_patterns", {"symbol": "BTC/USDT"})
     parsed = json.loads(result_str)
     assert parsed["pattern"] == "none"
+
+
+def test_get_derivatives_delegates_to_fetcher():
+    """Handler is a thin pass-through to DataFetcher.fetch_funding_rate_and_oi."""
+    executor, _, fetcher = _make_executor()
+    fetcher.fetch_funding_rate_and_oi.return_value = {
+        "funding_rate": "0.0123% (neutral)",
+        "open_interest_trend": "5,000,000 USD value (active)",
+    }
+
+    result_str = executor.execute("get_derivatives", {"symbol": "BTC/USDT"})
+    parsed = json.loads(result_str)
+
+    assert parsed["funding_rate"] == "0.0123% (neutral)"
+    assert parsed["open_interest_trend"] == "5,000,000 USD value (active)"
+    fetcher.fetch_funding_rate_and_oi.assert_called_once_with("BTC/USDT")
