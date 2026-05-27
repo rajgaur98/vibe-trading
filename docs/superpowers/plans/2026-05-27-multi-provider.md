@@ -69,7 +69,7 @@
 **Files:**
 - Create: `tests/test_multi_provider.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
   
   Create the unit test file containing multi-provider client tests.
   
@@ -116,22 +116,22 @@
       mock_completion.assert_called_once()
   ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   
   Run: `uv run pytest tests/test_multi_provider.py`
   Expected: FAIL with import errors or missing attributes (`LLMClient` not found)
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
   
   Create placeholder or empty stub functions in `src/vibe_trading/agents/client.py` so the tests can run and fail specifically on logic.
   For now, just add functions that raise `NotImplementedError`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   
   Run: `uv run pytest tests/test_multi_provider.py`
   Expected: FAIL with `NotImplementedError` or assertion errors, indicating tests are loaded.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   
   ```bash
   git add tests/test_multi_provider.py
