@@ -1,0 +1,30 @@
+id: 008-btc-jan-overbought
+description: 'Overbought Exhaustion for BTC/USDT at 2026-01-05T00:00:00+00:00. Derived
+  labels: bias=bullish, volume=weak, confluence=0.75, trader_action=flat. RSI=71.7
+  (overbought), MACD_hist=179.7086 (bullish_momentum_expanding), OBV=neutral, ADX=35.2
+  (strong_trend).'
+symbol: BTC/USDT
+timestamp: 2026-01-05 00:00:00+00:00
+analyst_label:
+  market_bias: bullish
+  volume_confirmation: weak
+  nearest_support: 91697.0
+  nearest_resistance: 92000.01
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - overbought RSI
+    - momentum exhaustion risk
+    must_not_mention:
+    - chase the move higher
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

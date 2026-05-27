@@ -1,0 +1,30 @@
+id: 014-sui-volume-divergence
+description: 'Bullish Price Obv Divergent for SUI/USDT at 2026-01-28T00:00:00+00:00.
+  Derived labels: bias=neutral, volume=weak, confluence=0.0, trader_action=flat. RSI=39.7
+  (approaching_oversold), MACD_hist=0.0033 (bullish_momentum_expanding), OBV=distribution,
+  ADX=34.5 (strong_trend).'
+symbol: SUI/USDT
+timestamp: 2026-01-28 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 1.4305
+  nearest_resistance: 1.4684
+  confluence_score: 0.0
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

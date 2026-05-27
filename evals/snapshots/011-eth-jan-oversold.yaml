@@ -1,0 +1,30 @@
+id: 011-eth-jan-oversold
+description: 'Oversold Bounce Setup for ETH/USDT at 2026-01-25T00:00:00+00:00. Derived
+  labels: bias=neutral, volume=weak, confluence=0.0, trader_action=flat. RSI=35.6
+  (approaching_oversold), MACD_hist=7.8263 (bullish_momentum_expanding), OBV=distribution,
+  ADX=30.4 (strong_trend).'
+symbol: ETH/USDT
+timestamp: 2026-01-25 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 2944.0
+  nearest_resistance: 2994.38
+  confluence_score: 0.0
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

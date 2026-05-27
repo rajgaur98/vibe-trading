@@ -1,0 +1,31 @@
+id: 009-btc-may-overbought
+description: 'Overbought Exhaustion for BTC/USDT at 2026-05-05T00:00:00+00:00. Derived
+  labels: bias=bullish, volume=weak, confluence=0.75, trader_action=long. RSI=67.1
+  (approaching_overbought), MACD_hist=153.0193 (bullish_momentum_expanding), OBV=neutral,
+  ADX=32.8 (strong_trend).'
+symbol: BTC/USDT
+timestamp: 2026-05-05 00:00:00+00:00
+analyst_label:
+  market_bias: bullish
+  volume_confirmation: weak
+  nearest_support: 78202.0
+  nearest_resistance: 79485.66
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - bullish bias
+    - weak volume confirmation
+    must_not_mention:
+    - strong-conviction breakout call
+trader_label:
+  action: long
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: next_resistance
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - align with bullish bias
+    - asymmetric reward
+    must_not_mention:
+    - enter despite weak confluence

@@ -1,0 +1,30 @@
+id: 005-btc-apr-breakout
+description: 'Bullish Breakout At Resistance for BTC/USDT at 2026-04-05T00:00:00+00:00.
+  Derived labels: bias=neutral, volume=weak, confluence=0.25, trader_action=flat.
+  RSI=44.8 (neutral), MACD_hist=26.9544 (bullish_momentum_expanding), OBV=distribution,
+  ADX=17.6 (weak_trend).'
+symbol: BTC/USDT
+timestamp: 2026-04-05 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 66621.06
+  nearest_resistance: 68169.65
+  confluence_score: 0.25
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

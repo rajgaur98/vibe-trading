@@ -1,0 +1,30 @@
+id: 002-link-strong-bullish
+description: 'Strong Bullish Trend for LINK/USDT at 2026-02-07T00:00:00+00:00. Derived
+  labels: bias=neutral, volume=weak, confluence=0.25, trader_action=flat. RSI=42.6
+  (neutral), MACD_hist=0.0822 (bullish_momentum_expanding), OBV=neutral, ADX=59.0
+  (strong_trend).'
+symbol: LINK/USDT
+timestamp: 2026-02-07 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 8.97
+  nearest_resistance: 9.9
+  confluence_score: 0.25
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

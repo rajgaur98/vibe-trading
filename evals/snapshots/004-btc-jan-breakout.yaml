@@ -1,0 +1,31 @@
+id: 004-btc-jan-breakout
+description: 'Bullish Breakout At Resistance for BTC/USDT at 2026-01-15T00:00:00+00:00.
+  Derived labels: bias=bullish, volume=weak, confluence=0.75, trader_action=long.
+  RSI=67.8 (approaching_overbought), MACD_hist=292.3326 (bullish_momentum_expanding),
+  OBV=neutral, ADX=36.4 (strong_trend).'
+symbol: BTC/USDT
+timestamp: 2026-01-15 00:00:00+00:00
+analyst_label:
+  market_bias: bullish
+  volume_confirmation: weak
+  nearest_support: 91697.0
+  nearest_resistance: 97924.49
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - bullish bias
+    - weak volume confirmation
+    must_not_mention:
+    - strong-conviction breakout call
+trader_label:
+  action: long
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: next_resistance
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - align with bullish bias
+    - asymmetric reward
+    must_not_mention:
+    - enter despite weak confluence

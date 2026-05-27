@@ -1,0 +1,30 @@
+id: 007-sol-may-bearish
+description: 'Strong Bearish Trend for SOL/USDT at 2026-05-08T00:00:00+00:00. Derived
+  labels: bias=bearish, volume=confirmed, confluence=0.5, trader_action=flat. RSI=56.3
+  (neutral), MACD_hist=-0.1284 (bearish_momentum_expanding), OBV=distribution, ADX=34.9
+  (strong_trend).'
+symbol: SOL/USDT
+timestamp: 2026-05-08 00:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: confirmed
+  nearest_support: 87.34
+  nearest_resistance: 88.08
+  confluence_score: 0.5
+  thesis_rubric:
+    must_mention:
+    - bearish bias
+    - distribution confirms weakness
+    must_not_mention:
+    - bullish reversal call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

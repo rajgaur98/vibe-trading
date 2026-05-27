@@ -1,0 +1,30 @@
+id: 013-eth-apr-range
+description: 'Range Bound Chop for ETH/USDT at 2026-04-25T00:00:00+00:00. Derived
+  labels: bias=bearish, volume=confirmed, confluence=0.5, trader_action=flat. RSI=45.4
+  (neutral), MACD_hist=-2.7565 (bearish_momentum_expanding), OBV=distribution, ADX=16.9
+  (weak_trend).'
+symbol: ETH/USDT
+timestamp: 2026-04-25 00:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: confirmed
+  nearest_support: 2302.9
+  nearest_resistance: 2329.93
+  confluence_score: 0.5
+  thesis_rubric:
+    must_mention:
+    - bearish bias
+    - distribution confirms weakness
+    must_not_mention:
+    - bullish reversal call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

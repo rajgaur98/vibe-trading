@@ -1,0 +1,30 @@
+id: 006-eth-may-bearish
+description: 'Strong Bearish Trend for ETH/USDT at 2026-05-15T00:00:00+00:00. Derived
+  labels: bias=neutral, volume=weak, confluence=0.0, trader_action=flat. RSI=44.1
+  (neutral), MACD_hist=1.8017 (bullish_momentum_expanding), OBV=distribution, ADX=26.7
+  (strong_trend).'
+symbol: ETH/USDT
+timestamp: 2026-05-15 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 2265.61
+  nearest_resistance: 2273.87
+  confluence_score: 0.0
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

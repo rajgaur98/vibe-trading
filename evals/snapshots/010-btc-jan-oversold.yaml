@@ -1,0 +1,30 @@
+id: 010-btc-jan-oversold
+description: 'Oversold Bounce Setup for BTC/USDT at 2026-01-25T00:00:00+00:00. Derived
+  labels: bias=neutral, volume=weak, confluence=0.0, trader_action=flat. RSI=35.7
+  (approaching_oversold), MACD_hist=47.4885 (bullish_momentum_expanding), OBV=distribution,
+  ADX=39.2 (strong_trend).'
+symbol: BTC/USDT
+timestamp: 2026-01-25 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 89260.63
+  nearest_resistance: 89399.97
+  confluence_score: 0.0
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

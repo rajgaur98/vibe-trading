@@ -1,0 +1,30 @@
+id: 003-pengu-strong-bullish
+description: 'Strong Bullish Trend for PENGU/USDT at 2026-02-06T00:00:00+00:00. Derived
+  labels: bias=bearish, volume=weak, confluence=0.75, trader_action=flat. RSI=25.4
+  (oversold), MACD_hist=-0.0001 (bearish_momentum_expanding), OBV=neutral, ADX=63.2
+  (strong_trend).'
+symbol: PENGU/USDT
+timestamp: 2026-02-06 00:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: weak
+  nearest_support: 0.0069
+  nearest_resistance: 0.0079
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - oversold RSI
+    - potential mean-reversion
+    must_not_mention:
+    - sell into the dip
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal
