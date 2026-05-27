@@ -252,7 +252,7 @@
 **Files:**
 - Modify: `src/vibe_trading/agents/analyst.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
   
   Open `tests/test_multi_provider.py` and add a new test that instantiates `TechnicalVolumeAnalyst` and calls `.analyze()`, mocking the `LLMClient.call_llm` call.
   
@@ -275,12 +275,12 @@
       mock_client.call_llm.assert_called_once()
   ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
   
   Run: `uv run pytest tests/test_multi_provider.py`
   Expected: FAIL with `ImportError: cannot import name 'GeminiClient' from 'vibe_trading.agents.client'` (or similar in `analyst.py` imports)
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
   
   Modify `src/vibe_trading/agents/analyst.py` to use `LLMClient` instead of `GeminiClient`.
   
@@ -307,12 +307,12 @@
               )
   ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
   
   Run: `uv run pytest tests/test_multi_provider.py`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   
   ```bash
   git add src/vibe_trading/agents/analyst.py tests/test_multi_provider.py
