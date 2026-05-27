@@ -1,3 +1,4 @@
+import json
 import pytest
 from unittest.mock import patch, MagicMock
 from vibe_trading.agents.client import LLMClient, get_litellm_model_string
@@ -176,3 +177,47 @@ def test_analyst_tools_schema_shape():
         assert "parameters" in fn
         assert fn["parameters"]["type"] == "object"
         assert "properties" in fn["parameters"]
+
+from vibe_trading.agents.tools import ToolExecutor
+
+def _make_executor():
+    """Build a ToolExecutor with mocked Database and DataFetcher."""
+    db = MagicMock()
+    fetcher = MagicMock()
+    return ToolExecutor(db=db, fetcher=fetcher), db, fetcher
+
+def test_tool_executor_dispatch():
+    """Every tool name routes to a callable handler in the dispatch table."""
+    executor, _, _ = _make_executor()
+    expected = {
+        "get_candles",
+        "get_indicators",
+        "get_support_resistance",
+        "get_candlestick_patterns",
+        "get_derivatives",
+        "get_market_sentiment",
+    }
+    assert set(executor._dispatch.keys()) == expected
+    for name, handler in executor._dispatch.items():
+        assert callable(handler), f"{name} handler must be callable"
+
+def test_tool_executor_unknown_tool():
+    """Unknown tool names return a structured error JSON without raising."""
+    executor, _, _ = _make_executor()
+    result = executor.execute("not_a_real_tool", {})
+    parsed = json.loads(result)
+    assert "error" in parsed
+    assert "Unknown tool" in parsed["error"]
+
+def test_tool_executor_exception_handling():
+    """Handler exceptions are caught and returned as error JSON."""
+    executor, _, _ = _make_executor()
+    def boom(**kwargs):
+        raise RuntimeError("simulated DB failure")
+    executor._dispatch["get_candles"] = boom
+
+    result = executor.execute("get_candles", {"symbol": "BTC/USDT", "timeframe": "4h"})
+    parsed = json.loads(result)
+    assert "error" in parsed
+    assert "Tool execution failed" in parsed["error"]
+    assert "simulated DB failure" in parsed["error"]
