@@ -1,0 +1,14 @@
+id: fixture-002-malformed
+description: Missing trader_label entirely.
+symbol: ETH/USDT
+timestamp: 2026-05-22T04:00:00Z
+
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: weak
+  nearest_support: 1800.0
+  nearest_resistance: 2000.0
+  confluence_score: 0.4
+  thesis_rubric:
+    must_mention: []
+    must_not_mention: []

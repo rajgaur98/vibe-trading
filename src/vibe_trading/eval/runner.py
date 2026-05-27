@@ -44,3 +44,35 @@ class CaseResult(BaseModel):
     analyst_schema_ok: bool = False
     trader_schema_ok: bool = False
     error: Optional[str] = None              # populated only on hard failures
+
+
+import logging
+from pathlib import Path
+
+import yaml
+from pydantic import ValidationError
+
+logger = logging.getLogger(__name__)
+
+
+def load_cases(snapshots_dir: Path) -> list[EvalCase]:
+    """Load every `*.yaml` file under `snapshots_dir` into a list of validated EvalCase objects.
+
+    Files starting with `.` (e.g. .gitkeep) are skipped.
+    Raises ValueError with the offending file path on any malformed YAML or schema violation.
+    """
+    snapshots_dir = Path(snapshots_dir)
+    cases: list[EvalCase] = []
+
+    for yaml_path in sorted(snapshots_dir.glob("*.yaml")):
+        if yaml_path.name.startswith("."):
+            continue
+        try:
+            raw = yaml.safe_load(yaml_path.read_text())
+            case = EvalCase.model_validate(raw)
+        except (yaml.YAMLError, ValidationError) as e:
+            raise ValueError(f"Failed to load eval case from {yaml_path}: {e}") from e
+        cases.append(case)
+
+    logger.info(f"Loaded {len(cases)} eval cases from {snapshots_dir}")
+    return cases
