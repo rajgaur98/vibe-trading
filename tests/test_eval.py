@@ -201,3 +201,81 @@ def test_run_case_handles_analyst_exception(mock_pipeline_cls, mock_analyst_cls,
     assert result.analyst_output is None
     assert "simulated analyst parse failure" in result.error
     mock_trader_cls.return_value.decide.assert_not_called()
+
+
+from vibe_trading.eval.scorer import (
+    FieldScore, score_categorical, score_numeric_tolerance, NUMERIC_TOLERANCES,
+)
+
+
+def test_score_categorical_match():
+    fs = score_categorical("market_bias", "bullish", "bullish")
+    assert fs.field == "market_bias"
+    assert fs.passed is True
+    assert fs.score == 1.0
+
+
+def test_score_categorical_mismatch():
+    fs = score_categorical("market_bias", "bearish", "bullish")
+    assert fs.passed is False
+    assert fs.score == 0.0
+    assert "bearish" in fs.note and "bullish" in fs.note
+
+
+def test_score_numeric_within_ok_threshold_pct():
+    """nearest_support uses percentage tolerance; within 2% of expected scores 1.0."""
+    fs = score_numeric_tolerance("nearest_support", actual=30050.0, expected=30100.0)
+    assert fs.score == 1.0
+    assert fs.passed is True
+
+
+def test_score_numeric_linear_degradation_pct():
+    """nearest_support 3.5% off (between 2% ok and 5% zero) -> linearly degraded to ~0.5."""
+    # 3.5% above expected 30100.0 -> 31153.5; delta = 3.5%, ok=2%, zero=5%
+    # score = 1.0 - (0.035 - 0.02) / (0.05 - 0.02) = 1.0 - 0.5 = 0.5
+    fs = score_numeric_tolerance("nearest_support", actual=31153.5, expected=30100.0)
+    assert 0.45 < fs.score < 0.55
+    assert fs.passed is False  # passed is True only when score == 1.0
+
+
+def test_score_numeric_outside_zero_threshold_pct():
+    """nearest_support 8% off scores 0.0."""
+    fs = score_numeric_tolerance("nearest_support", actual=32508.0, expected=30100.0)
+    assert fs.score == 0.0
+    assert fs.passed is False
+
+
+def test_score_numeric_absolute_distance_for_confluence():
+    """confluence_score uses absolute tolerance (±0.15 ok, ±0.30 zero)."""
+    fs = score_numeric_tolerance("confluence_score", actual=0.7, expected=0.75)  # delta 0.05 -> within ok
+    assert fs.score == 1.0
+    fs2 = score_numeric_tolerance("confluence_score", actual=0.4, expected=0.75)  # delta 0.35 -> beyond zero
+    assert fs2.score == 0.0
+
+
+def test_score_numeric_expected_zero_uses_absolute_distance():
+    """When expected == 0.0, fall back to absolute distance using ok/zero thresholds as absolute."""
+    fs = score_numeric_tolerance("nearest_support", actual=0.01, expected=0.0)
+    # NUMERIC_TOLERANCES['nearest_support'] = {'ok': 0.02, 'zero': 0.05} treated as absolute
+    # delta = 0.01, within ok=0.02 -> score 1.0
+    assert fs.score == 1.0
+
+
+def test_score_numeric_handles_none_actual():
+    fs = score_numeric_tolerance("nearest_support", actual=None, expected=30000.0)
+    assert fs.score == 0.0
+    assert "missing value" in fs.note
+
+
+def test_score_numeric_handles_nan_actual():
+    import math
+    fs = score_numeric_tolerance("nearest_support", actual=math.nan, expected=30000.0)
+    assert fs.score == 0.0
+    assert "missing value" in fs.note
+
+
+def test_numeric_tolerances_has_all_required_fields():
+    """Smoke check: every numeric field used in the rules table has a tolerance entry."""
+    assert set(NUMERIC_TOLERANCES.keys()) == {
+        "nearest_support", "nearest_resistance", "confluence_score", "risk_reward_ratio",
+    }
