@@ -2,7 +2,7 @@ import json
 import logging
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from vibe_trading.data.db import Database
@@ -164,14 +164,14 @@ class ToolExecutor:
 
     def _get_candles(self, symbol: str, timeframe: str, limit: int = 20) -> list:
         limit = min(int(limit), 50)
-        ts = self.current_timestamp or datetime.utcnow()
+        ts = self.current_timestamp or datetime.now(timezone.utc)
         df = self.pipeline._get_candles(symbol, timeframe, ts, limit=limit)
         if df.empty:
             return []
         return df.to_dict(orient="records")
 
     def _get_indicators(self, symbol: str, timeframe: str = "4h") -> dict:
-        ts = self.current_timestamp or datetime.utcnow()
+        ts = self.current_timestamp or datetime.now(timezone.utc)
         df = self.pipeline._get_candles(symbol, timeframe, ts, limit=300)
         if df.empty or len(df) < 50:
             return {"error": f"Not enough candles for {symbol} {timeframe} to compute indicators (need >= 50)"}
@@ -194,7 +194,7 @@ class ToolExecutor:
         }
 
     def _get_support_resistance(self, symbol: str) -> dict:
-        ts = self.current_timestamp or datetime.utcnow()
+        ts = self.current_timestamp or datetime.now(timezone.utc)
         df = self.pipeline._get_candles(symbol, "4h", ts, limit=300)
         if df.empty:
             return {"error": f"No 4h candles available for {symbol}"}
@@ -213,7 +213,7 @@ class ToolExecutor:
         }
 
     def _get_candlestick_patterns(self, symbol: str) -> dict:
-        ts = self.current_timestamp or datetime.utcnow()
+        ts = self.current_timestamp or datetime.now(timezone.utc)
         df = self.pipeline._get_candles(symbol, "4h", ts, limit=30)
         if df.empty or len(df) < 5:
             return {"pattern": "none"}
