@@ -552,3 +552,85 @@ def test_write_report_writes_json_file(tmp_path):
     data = json_mod.loads(path.read_text())
     assert data["case_count"] == 1
     assert data["per_case"]["only-case"]["total_score"] == 0.85
+
+
+from vibe_trading.eval.report import (
+    DiffResult, REGRESSION_THRESHOLDS, load_baseline, write_baseline, diff_against_baseline,
+)
+
+
+def test_load_baseline_returns_none_when_missing(tmp_path):
+    assert load_baseline(tmp_path / "no-such-file.json") is None
+
+
+def test_load_baseline_returns_none_when_malformed(tmp_path):
+    p = tmp_path / "baseline.json"
+    p.write_text("not valid json {")
+    assert load_baseline(p) is None
+
+
+def test_write_baseline_round_trips(tmp_path):
+    scores = [_make_score("a", 0.85), _make_score("b", 0.7)]
+    report = SuiteReport.from_scores(scores)
+    p = tmp_path / "baseline.json"
+    write_baseline(report, p)
+
+    loaded = load_baseline(p)
+    assert loaded is not None
+    assert loaded["overall_score"] == report.overall_score
+    assert loaded["per_case"]["a"]["total_score"] == 0.85
+
+
+def test_diff_against_baseline_detects_overall_regression():
+    baseline = {
+        "overall_score": 0.85,
+        "per_case": {"a": {"total_score": 0.9, "schema_ok": True}},
+    }
+    new = SuiteReport.from_scores([_make_score("a", 0.6)])  # overall 0.6 vs baseline 0.85 -> regression
+    diff = diff_against_baseline(new, baseline)
+    assert diff.is_regression is True
+    assert diff.overall_delta < 0
+
+
+def test_diff_against_baseline_detects_per_case_regression():
+    baseline = {
+        "overall_score": 0.85,
+        "per_case": {
+            "a": {"total_score": 0.9, "schema_ok": True},
+            "b": {"total_score": 0.8, "schema_ok": True},
+        },
+    }
+    # Overall barely moves but case 'a' drops by 0.10 (> 0.05 threshold) -> regression
+    new = SuiteReport.from_scores([_make_score("a", 0.80), _make_score("b", 0.90)])
+    diff = diff_against_baseline(new, baseline)
+    assert "a" in diff.per_case_regressions
+    assert diff.is_regression is True
+
+
+def test_diff_against_baseline_flags_new_schema_failure():
+    baseline = {
+        "overall_score": 1.0,
+        "per_case": {"a": {"total_score": 1.0, "schema_ok": True}},
+    }
+    new = SuiteReport.from_scores([_make_score("a", 0.0, schema_ok=False, error="parse")])
+    diff = diff_against_baseline(new, baseline)
+    assert "a" in diff.new_schema_failures
+    assert diff.is_regression is True
+
+
+def test_diff_against_baseline_reports_improvements_without_regression():
+    baseline = {
+        "overall_score": 0.7,
+        "per_case": {"a": {"total_score": 0.6, "schema_ok": True}},
+    }
+    new = SuiteReport.from_scores([_make_score("a", 0.9)])
+    diff = diff_against_baseline(new, baseline)
+    assert diff.is_regression is False
+    assert "a" in diff.per_case_improvements
+    assert diff.overall_delta > 0
+
+
+def test_regression_thresholds_exist():
+    """Smoke check the constants live where the spec said they would."""
+    assert REGRESSION_THRESHOLDS["overall"] == 0.02
+    assert REGRESSION_THRESHOLDS["per_case"] == 0.05

@@ -62,3 +62,92 @@ def write_report(report: SuiteReport, reports_dir: Path) -> Path:
     path = reports_dir / (report.run_id + ".json")
     path.write_text(json.dumps(report.model_dump(mode="json"), indent=2, default=str))
     return path
+
+
+REGRESSION_THRESHOLDS = {
+    "overall": 0.02,
+    "per_case": 0.05,
+}
+
+
+class DiffResult(BaseModel):
+    overall_delta: float
+    per_case_regressions: list[str]
+    per_case_improvements: list[str]
+    new_schema_failures: list[str]
+    is_regression: bool
+
+
+def load_baseline(baseline_path: Path) -> Optional[dict]:
+    """Load the baseline JSON. Returns None if file is missing or malformed."""
+    baseline_path = Path(baseline_path)
+    if not baseline_path.exists():
+        return None
+    try:
+        return json.loads(baseline_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def write_baseline(report: SuiteReport, baseline_path: Path) -> None:
+    """Overwrite baseline.json with the current report's scores."""
+    baseline_path = Path(baseline_path)
+    baseline_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot = {
+        "baseline_committed_at": datetime.now(timezone.utc).isoformat(),
+        "baseline_run_id": report.run_id,
+        "overall_score": report.overall_score,
+        "analyst_score": report.analyst_score,
+        "trader_score": report.trader_score,
+        "pass_rate": report.pass_rate,
+        "schema_failures": report.schema_failures,
+        "per_case": {
+            cid: {
+                "total_score": cs.total_score,
+                "analyst_score": cs.analyst_score,
+                "trader_score": cs.trader_score,
+                "schema_ok": cs.schema_ok,
+            }
+            for cid, cs in report.per_case.items()
+        },
+    }
+    baseline_path.write_text(json.dumps(snapshot, indent=2, default=str))
+
+
+def diff_against_baseline(report: SuiteReport, baseline: dict) -> DiffResult:
+    """Compute regression status against a loaded baseline dict."""
+    overall_delta = report.overall_score - baseline.get("overall_score", 0.0)
+
+    per_case_regressions: list[str] = []
+    per_case_improvements: list[str] = []
+    new_schema_failures: list[str] = []
+
+    baseline_cases = baseline.get("per_case", {})
+    for case_id, current in report.per_case.items():
+        prior = baseline_cases.get(case_id)
+        if prior is None:
+            continue  # new case not in baseline -> not graded against history
+
+        delta = current.total_score - prior.get("total_score", 0.0)
+        if delta < -REGRESSION_THRESHOLDS["per_case"]:
+            per_case_regressions.append(case_id)
+        elif delta > REGRESSION_THRESHOLDS["per_case"]:
+            per_case_improvements.append(case_id)
+
+        # Schema regression: case parsed in baseline but failed now
+        if prior.get("schema_ok") is True and current.schema_ok is False:
+            new_schema_failures.append(case_id)
+
+    is_regression = (
+        overall_delta < -REGRESSION_THRESHOLDS["overall"]
+        or len(per_case_regressions) > 0
+        or len(new_schema_failures) > 0
+    )
+
+    return DiffResult(
+        overall_delta=overall_delta,
+        per_case_regressions=per_case_regressions,
+        per_case_improvements=per_case_improvements,
+        new_schema_failures=new_schema_failures,
+        is_regression=is_regression,
+    )
