@@ -8,7 +8,21 @@ def test_get_litellm_model_string():
     assert get_litellm_model_string("gemini", "gemini-3.1-flash-lite") == "gemini/gemini-3.1-flash-lite"
     assert get_litellm_model_string("openai", "gpt-4o") == "openai/gpt-4o"
     assert get_litellm_model_string("anthropic", "claude-3") == "anthropic/claude-3"
+    assert get_litellm_model_string("ollama", "qwen2.5:14b") == "ollama/qwen2.5:14b"
+    assert get_litellm_model_string("groq", "llama-3.3-70b-versatile") == "groq/llama-3.3-70b-versatile"
     assert get_litellm_model_string("other", "model") == "model"
+
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "groq", "GROQ_API_KEY": "test_groq_key"})
+def test_llm_client_initialization_groq():
+    client = LLMClient()
+    assert client.provider == "groq"
+
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "groq"}, clear=True)
+def test_llm_client_initialization_groq_missing_key():
+    with pytest.raises(ValueError, match="GROQ_API_KEY environment variable is not set"):
+        LLMClient()
 
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
 def test_llm_client_initialization_gemini():

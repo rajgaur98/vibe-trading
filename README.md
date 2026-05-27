@@ -73,10 +73,25 @@ cp .env.example .env
 ```
 Open `.env` and enter your credentials:
 ```env
-GEMINI_API_KEY=your_google_ai_studio_api_key
+# Provider selection (default: gemini). LiteLLM routes everything through
+# LLMClient, so you can swap providers via env vars without code changes.
+LLM_PROVIDER=gemini                              # gemini | openai | anthropic | groq | ollama
+LLM_MODEL=gemini-3.1-flash-lite                  # provider-native model id
+
+# Provide the key for whichever provider you selected
+GEMINI_API_KEY=your_google_ai_studio_api_key     # for LLM_PROVIDER=gemini
+# GROQ_API_KEY=your_groq_console_api_key         # for LLM_PROVIDER=groq (free tier, faster, way higher rate limits)
+# OPENAI_API_KEY=...                             # for LLM_PROVIDER=openai
+# ANTHROPIC_API_KEY=...                          # for LLM_PROVIDER=anthropic
+
 DISCORD_WEBHOOK_URL=your_discord_webhook_url
 TRADING_MODE=PAPER
 ```
+
+**Recommended for fewer rate-limit headaches:** set `LLM_PROVIDER=groq` +
+`LLM_MODEL=llama-3.3-70b-versatile` (a 70B open-weights model on Groq's LPU
+hardware — ~280 tok/s, native tool-calling, and the free tier comfortably
+covers both the live scheduler and the full eval suite).
 
 ---
 

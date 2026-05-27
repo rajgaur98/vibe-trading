@@ -8,31 +8,46 @@ logger = logging.getLogger(__name__)
 
 litellm.telemetry = False
 
+# Maps LLM_PROVIDER values to the LiteLLM prefix they require. Providers in this
+# map get their `model` string namespaced as `<prefix>/<model>`. Unknown provider
+# names fall through and pass `model` verbatim to LiteLLM (which may still resolve
+# them via its built-in provider auto-detection for prefixed model identifiers).
+_LITELLM_PROVIDER_PREFIXES = {
+    "gemini": "gemini",
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "ollama": "ollama",
+    "groq": "groq",
+}
+
+
 def get_litellm_model_string(provider: str, model: str) -> str:
     """Converts provider and model parameters to standard LiteLLM model identifiers."""
-    provider = provider.lower()
-    if provider == "gemini":
-        return f"gemini/{model}"
-    elif provider == "openai":
-        return f"openai/{model}"
-    elif provider == "anthropic":
-        return f"anthropic/{model}"
-    elif provider == "ollama":
-        return f"ollama/{model}"
+    prefix = _LITELLM_PROVIDER_PREFIXES.get(provider.lower())
+    if prefix:
+        return f"{prefix}/{model}"
     return model
+
+
+# Providers that require an API key set via environment variable. Validated on
+# LLMClient init so misconfiguration fails fast instead of at the first call.
+_PROVIDER_API_KEY_ENV = {
+    "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "groq": "GROQ_API_KEY",
+}
+
 
 class LLMClient:
     def __init__(self):
         self.provider = os.getenv("LLM_PROVIDER", "gemini").lower()
         self.model = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
-        
+
         # Dynamic key validation for active provider only
-        if self.provider == "gemini" and not os.getenv("GEMINI_API_KEY"):
-            raise ValueError("GEMINI_API_KEY environment variable is not set. Please check your .env file.")
-        elif self.provider == "openai" and not os.getenv("OPENAI_API_KEY"):
-            raise ValueError("OPENAI_API_KEY environment variable is not set. Please check your .env file.")
-        elif self.provider == "anthropic" and not os.getenv("ANTHROPIC_API_KEY"):
-            raise ValueError("ANTHROPIC_API_KEY environment variable is not set. Please check your .env file.")
+        required_key = _PROVIDER_API_KEY_ENV.get(self.provider)
+        if required_key and not os.getenv(required_key):
+            raise ValueError(f"{required_key} environment variable is not set. Please check your .env file.")
 
     @retry(
         stop=stop_after_attempt(3),
