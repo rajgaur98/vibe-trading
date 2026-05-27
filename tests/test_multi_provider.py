@@ -19,11 +19,25 @@ def test_llm_client_initialization_openai():
     client = LLMClient()
     assert client.provider == "openai"
 
-@patch.dict("os.environ", {"LLM_PROVIDER": "openai"})
-@patch.dict("os.environ", {}, clear=True)
+@patch.dict("os.environ", {"LLM_PROVIDER": "openai"}, clear=True)
 def test_llm_client_initialization_openai_missing_key():
     with pytest.raises(ValueError, match="OPENAI_API_KEY environment variable is not set"):
         LLMClient()
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "test_anthropic_key"})
+def test_llm_client_initialization_anthropic():
+    client = LLMClient()
+    assert client.provider == "anthropic"
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "anthropic"}, clear=True)
+def test_llm_client_initialization_anthropic_missing_key():
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable is not set"):
+        LLMClient()
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key", "LLM_MODEL": "custom-gemini-model"})
+def test_llm_client_initialization_model_override():
+    client = LLMClient()
+    assert client.model == "custom-gemini-model"
 
 @patch("litellm.completion")
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
@@ -36,4 +50,12 @@ def test_call_llm(mock_completion):
     client = LLMClient()
     res = client.call_llm("test-model", "system prompt", "user prompt")
     assert res == '{"result": "success"}'
-    mock_completion.assert_called_once()
+    mock_completion.assert_called_once_with(
+        model="gemini/test-model",
+        messages=[
+            {"role": "system", "content": "system prompt"},
+            {"role": "user", "content": "user prompt"}
+        ],
+        temperature=0.1
+    )
+
