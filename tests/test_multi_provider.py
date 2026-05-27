@@ -75,3 +75,21 @@ def test_analyst_integration():
     assert res.market_bias == "bullish"
     mock_client.call_llm.assert_called_once()
 
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_analyst_end_to_end_with_client_mock(mock_completion):
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = '{"market_bias": "bullish", "volume_confirmation": "confirmed", "thesis": "Strong breakout.", "nearest_support": 95.0, "nearest_resistance": 105.0, "confluence_score": 0.8}'
+    mock_completion.return_value = mock_response
+
+    analyst = TechnicalVolumeAnalyst()
+    res = analyst.analyze({"symbol": "BTC/USDT"})
+    
+    assert res.market_bias == "bullish"
+    mock_completion.assert_called_once()
+    # verify model prefix formatting
+    call_kwargs = mock_completion.call_args[1]
+    assert "gemini" in call_kwargs["model"]
+
