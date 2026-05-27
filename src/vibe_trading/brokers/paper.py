@@ -116,25 +116,29 @@ class PaperBroker(BaseBroker):
         action: str,
         size_usd: float,
         stop_price: float,
-        take_profit_price: float
+        take_profit_price: float,
+        entry_price: float = 0.0,
     ) -> Dict[str, Any]:
         if symbol in self.positions:
             logger.warning(f"PaperBroker: Position already exists for {symbol}. Skipping order.")
             return {"status": "rejected", "reason": "Position exists"}
-            
+
+        # entry_price > 0: filled immediately (live paper trading uses current mark from RiskManager).
+        # entry_price == 0.0: lazy-fill on first update_positions tick (backtester path).
         position = {
             "symbol": symbol,
             "side": action,
-            "entry_price": 0.0,  # Will be set when executing
+            "entry_price": entry_price,
             "size_usd": size_usd,
             "stop_price": stop_price,
             "take_profit_price": take_profit_price,
             "entry_time": datetime.utcnow()
         }
-        
+
         self.positions[symbol] = position
-        logger.info(f"PaperBroker: Submitted {action} order for {symbol} (Size: ${size_usd:.2f}, SL: {stop_price}, TP: {take_profit_price})")
-        
+        fill_state = f"filled @ ${entry_price:.4f}" if entry_price > 0 else "pending fill"
+        logger.info(f"PaperBroker: Submitted {action} order for {symbol} (Size: ${size_usd:.2f}, {fill_state}, SL: {stop_price}, TP: {take_profit_price})")
+
         self._save_position(position)
         return {"status": "success", "position": position}
 

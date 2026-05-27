@@ -22,9 +22,15 @@ class BaseBroker(ABC):
         action: str,  # 'long' or 'short'
         size_usd: float,
         stop_price: float,
-        take_profit_price: float
+        take_profit_price: float,
+        entry_price: float = 0.0,
     ) -> Dict[str, Any]:
-        """Submits an entry order with OCO stop and profit targets."""
+        """Submits an entry order with OCO stop and profit targets.
+
+        `entry_price`: when > 0, the position is filled at submission (live paper trading
+        path). When 0.0, the broker may lazily fill `entry_price` on the next
+        `update_positions` tick (backtester path that simulates next-candle fill).
+        """
         pass
 
     @abstractmethod

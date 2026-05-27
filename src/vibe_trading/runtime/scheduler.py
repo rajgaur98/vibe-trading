@@ -202,12 +202,15 @@ class TradingScheduler:
                     
                     if risk_res["approved"]:
                         # Submit order to broker (internally connects and closes DuckDB inside PaperBroker)
+                        # Pass entry_price so the live paper-trading path fills the position
+                        # immediately at the RiskManager-computed mark, not on the next tick.
                         self.broker.submit_order(
                             symbol=sym,
                             action=proposal["action"],
                             size_usd=risk_res["size_usd"],
                             stop_price=risk_res["stop_price"],
-                            take_profit_price=risk_res["take_profit_price"]
+                            take_profit_price=risk_res["take_profit_price"],
+                            entry_price=risk_res["entry_price"],
                         )
                         
                         self._send_discord_alert(
