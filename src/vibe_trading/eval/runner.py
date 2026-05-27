@@ -109,8 +109,8 @@ def run_case(case: EvalCase, db: Database) -> CaseResult:
         return CaseResult(case_id=case.id, snapshot_ok=False, error="empty snapshot — insufficient candle history?")
 
     # Analyst — explicit no db/fetcher so the tool-loop path is NOT taken
-    analyst = TechnicalVolumeAnalyst(db=None, fetcher=None)
     try:
+        analyst = TechnicalVolumeAnalyst(db=None, fetcher=None)
         actual_analyst_output = analyst.analyze(symbol=case.symbol, snapshot=snapshot)
     except Exception as e:
         logger.warning(f"Analyst failed for {case.id}: {e}")
@@ -131,8 +131,8 @@ def run_case(case: EvalCase, db: Database) -> CaseResult:
         confluence_score=case.analyst_label.confluence_score,
     )
 
-    trader = HeadTrader()
     try:
+        trader = HeadTrader()
         trader_output = trader.decide(case.symbol, labeled_analyst_output, FIXED_SCORECARD, FIXED_OPEN_POSITIONS)
     except Exception as e:
         logger.warning(f"Trader failed for {case.id}: {e}")

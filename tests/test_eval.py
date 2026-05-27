@@ -789,6 +789,24 @@ def test_main_returns_one_when_no_cases_found(mock_load_cases, tmp_path):
     assert rc == 1
 
 
+@patch("vibe_trading.eval.runner.HeadTrader")
+@patch("vibe_trading.eval.runner.TechnicalVolumeAnalyst")
+@patch("vibe_trading.eval.runner.FeaturePipeline")
+def test_run_case_handles_analyst_construction_failure(mock_pipeline_cls, mock_analyst_cls, mock_trader_cls):
+    """If TechnicalVolumeAnalyst() raises at construction time (e.g. missing API key), the suite continues."""
+    case = _load_valid_case()
+    mock_pipeline_cls.return_value.run.return_value = {"symbol": case.symbol}
+    mock_analyst_cls.side_effect = ValueError("GEMINI_API_KEY environment variable is not set")
+
+    # Must not raise — the failure should be captured on the CaseResult.
+    result = run_case(case, MagicMock())
+
+    assert result.snapshot_ok is True
+    assert result.analyst_schema_ok is False
+    assert "GEMINI_API_KEY" in result.error
+    mock_trader_cls.return_value.decide.assert_not_called()
+
+
 def test_suite_report_pass_rate_excludes_schema_failures():
     """A case with schema_ok=False and field_scores=[] must NOT count toward pass_rate."""
     cs_passing = CaseScore(
