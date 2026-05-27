@@ -296,24 +296,25 @@ def test_get_indicators_returns_latest_with_regimes():
     executor.set_timestamp(datetime(2026, 5, 27, 12))
 
     # Build a candle df that already has indicator columns populated (mocking _calculate_indicators)
+    n = 60
     fake_raw = pd.DataFrame({
-        "timestamp": [datetime(2026, 5, 27, h) for h in range(0, 16, 4)],
-        "open": [100.0] * 4,
-        "high": [101.0] * 4,
-        "low": [99.0] * 4,
-        "close": [100.5] * 4,
-        "volume": [1000.0] * 4,
+        "timestamp": [datetime(2026, 5, 27) + pd.Timedelta(hours=4 * i) for i in range(n)],
+        "open": [100.0] * n,
+        "high": [101.0] * n,
+        "low": [99.0] * n,
+        "close": [100.5] * n,
+        "volume": [1000.0] * n,
     })
     fake_feats = fake_raw.copy()
-    fake_feats["rsi_14"] = [50.0, 55.0, 65.0, 72.0]
-    fake_feats["macd"] = [0.1] * 4
-    fake_feats["macd_signal"] = [0.05] * 4
-    fake_feats["macd_hist"] = [0.05, 0.06, 0.07, 0.08]
-    fake_feats["adx_14"] = [20.0, 22.0, 26.0, 28.0]
-    fake_feats["obv"] = [1000.0, 1100.0, 1200.0, 1300.0]
-    fake_feats["ma20"] = [100.0] * 4
-    fake_feats["ma50"] = [99.0] * 4
-    fake_feats["ma200"] = [98.0] * 4
+    fake_feats["rsi_14"] = [50.0] * (n - 4) + [55.0, 65.0, 70.0, 72.0]
+    fake_feats["macd"] = [0.1] * n
+    fake_feats["macd_signal"] = [0.05] * n
+    fake_feats["macd_hist"] = [0.05] * (n - 4) + [0.06, 0.07, 0.075, 0.08]
+    fake_feats["adx_14"] = [20.0] * (n - 4) + [22.0, 24.0, 26.0, 28.0]
+    fake_feats["obv"] = [1000.0 + i * 5 for i in range(n - 4)] + [1000.0, 1100.0, 1200.0, 1300.0]
+    fake_feats["ma20"] = [100.0] * n
+    fake_feats["ma50"] = [99.0] * n
+    fake_feats["ma200"] = [98.0] * n
 
     executor.pipeline._get_candles = MagicMock(return_value=fake_raw)
     executor.pipeline._calculate_indicators = MagicMock(return_value=fake_feats)

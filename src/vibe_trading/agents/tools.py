@@ -173,7 +173,7 @@ class ToolExecutor:
     def _get_indicators(self, symbol: str, timeframe: str = "4h") -> dict:
         ts = self.current_timestamp or datetime.utcnow()
         df = self.pipeline._get_candles(symbol, timeframe, ts, limit=300)
-        if df.empty:
+        if df.empty or len(df) < 50:
             return {"error": f"Not enough candles for {symbol} {timeframe} to compute indicators (need >= 50)"}
         feats = self.pipeline._calculate_indicators(df)
         latest = feats.iloc[-1]
