@@ -462,3 +462,52 @@ def test_call_llm_with_tools_single_turn(mock_completion):
     assert "bullish" in result
     assert mock_completion.call_count == 2
     tool_executor.execute.assert_called_once_with("get_market_sentiment", {})
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_call_llm_with_tools_multi_turn(mock_completion):
+    """Two consecutive turns with tool_calls, then a final content message."""
+    # Turn 1: call get_candles
+    msg1 = MagicMock()
+    msg1.tool_calls = [MagicMock()]
+    msg1.tool_calls[0].id = "call_1"
+    msg1.tool_calls[0].function.name = "get_candles"
+    msg1.tool_calls[0].function.arguments = '{"symbol": "BTC/USDT", "timeframe": "4h"}'
+
+    # Turn 2: call get_indicators
+    msg2 = MagicMock()
+    msg2.tool_calls = [MagicMock()]
+    msg2.tool_calls[0].id = "call_2"
+    msg2.tool_calls[0].function.name = "get_indicators"
+    msg2.tool_calls[0].function.arguments = '{"symbol": "BTC/USDT", "timeframe": "4h"}'
+
+    # Turn 3: final answer
+    msg3 = MagicMock()
+    msg3.tool_calls = None
+    msg3.content = '{"market_bias": "neutral"}'
+
+    mock_completion.side_effect = [
+        MagicMock(choices=[MagicMock(message=msg1)]),
+        MagicMock(choices=[MagicMock(message=msg2)]),
+        MagicMock(choices=[MagicMock(message=msg3)]),
+    ]
+
+    tool_executor = MagicMock()
+    tool_executor.execute.side_effect = ['{"candles": []}', '{"rsi_14": 50}']
+
+    client = LLMClient()
+    result = client.call_llm_with_tools(
+        model_name="m",
+        system_instruction="sys",
+        prompt="usr",
+        tools=[],
+        tool_executor=tool_executor,
+    )
+
+    assert "neutral" in result
+    assert mock_completion.call_count == 3
+    assert tool_executor.execute.call_count == 2
+    # Verify order of tool calls
+    assert tool_executor.execute.call_args_list[0][0][0] == "get_candles"
+    assert tool_executor.execute.call_args_list[1][0][0] == "get_indicators"
