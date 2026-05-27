@@ -7,7 +7,7 @@ import json
 from apscheduler.schedulers.blocking import BlockingScheduler
 from langfuse import observe, propagate_attributes
 
-from vibe_trading.data.db import Database
+from vibe_trading.data.db import Database, PostgresDatabase
 from vibe_trading.data.fetcher import DataFetcher
 from vibe_trading.features.pipeline import FeaturePipeline
 from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
@@ -22,20 +22,21 @@ class TradingScheduler:
     def __init__(self, symbols: list = None):
         self.symbols = symbols or []
         self.db = Database()
+        self.pg_db = PostgresDatabase()
         
         # Load correct broker dependency based on TRADING_MODE
         mode = os.getenv("TRADING_MODE", "PAPER").upper()
         if mode == "LIVE_SANDBOX":
             self.broker = CoinbaseBroker()
         else:
-            self.broker = PaperBroker(db=self.db)
+            self.broker = PaperBroker(db=self.pg_db)
         
         self.fetcher = DataFetcher()
         self.pipeline = FeaturePipeline(self.db)
         self.risk_manager = RiskManager()
             
         # Initialize agents
-        self.analyst = TechnicalVolumeAnalyst()
+        self.analyst = TechnicalVolumeAnalyst(db=self.db, fetcher=self.fetcher)
         self.trader = HeadTrader()
         
         # Keep track of analyst scorecard (mock in v1)
@@ -110,11 +111,11 @@ class TradingScheduler:
                 # Update positions (internally connects and closes DuckDB inside PaperBroker)
                 closed_trades = self.broker.update_positions(current_prices)
                 if closed_trades:
-                    self.db.connect()
+                    self.pg_db.connect()
                     try:
                         for trade in closed_trades:
                             # Log closed trade to DB
-                            self.db.conn.execute("""
+                            self.pg_db.conn.execute("""
                                 INSERT INTO trades (trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (trade["trade_id"], trade["symbol"], trade["action"], trade["entry_time"], trade["entry_price"],
@@ -126,7 +127,7 @@ class TradingScheduler:
                                 f"PnL: **${trade['realized_pnl']:.2f}** ({trade['result'].upper()})"
                             )
                     finally:
-                        self.db.close()
+                        self.pg_db.close()
                 
                 # 3. Check for new entry signals
                 for sym in trending_symbols:
@@ -154,29 +155,34 @@ class TradingScheduler:
                     
                     last_ts, current_price = last_candle_ts_res
                     
-                    # Generate market snapshot (internally connects and closes DuckDB)
+                    # Step 1: Analyst agent evaluation via tool-use loop
+                    # (the analyst opens its own short-lived DB connections via the ToolExecutor)
+                    try:
+                        analyst_report = self.analyst.analyze(symbol=sym, timestamp=last_ts)
+                    except RuntimeError as e:
+                        logger.error(f"Analyst tool-loop failed for {sym}: {e}. Skipping symbol.")
+                        continue
+
+                    # Build the deterministic snapshot for downstream RiskManager + decision_log audit.
                     snapshot = self.pipeline.run(sym, last_ts)
                     if not snapshot:
                         continue
-                    
-                    # Step 1: Analyst agent evaluation (database is fully closed during this slow API call!)
-                    analyst_report = self.analyst.analyze(snapshot)
                     
                     # Step 2: Head Trader decision (database is fully closed during this slow API call!)
                     open_positions = self.broker.get_open_positions()
                     proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions)
                     
                     # Step 3: Log decision to database
-                    self.db.connect()
+                    self.pg_db.connect()
                     try:
-                        self.db.conn.execute("""
+                        self.pg_db.conn.execute("""
                             INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
                               proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
                               proposal["reasoning_summary"], json.dumps(snapshot, default=str)))
                     finally:
-                        self.db.close()
+                        self.pg_db.close()
                     
                     if proposal["action"] == "flat":
                         logger.info(f"Head Trader decided FLAT for {sym}. Reasoning: {proposal['reasoning_summary']}")
