@@ -178,4 +178,13 @@ class ToolExecutor:
         raise NotImplementedError
 
     def _get_market_sentiment(self) -> dict:
-        raise NotImplementedError
+        url = "https://api.alternative.me/fng/?limit=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            payload = json.loads(response.read().decode())
+        entry = payload["data"][0]
+        return {
+            "value": int(entry["value"]),
+            "classification": entry["value_classification"],
+            "timestamp": entry["timestamp"],
+        }

@@ -221,3 +221,38 @@ def test_tool_executor_exception_handling():
     assert "error" in parsed
     assert "Tool execution failed" in parsed["error"]
     assert "simulated DB failure" in parsed["error"]
+
+
+from io import BytesIO
+
+def test_get_market_sentiment():
+    """Mock the Fear & Greed Index HTTP endpoint; verify parsing."""
+    executor, _, _ = _make_executor()
+
+    fake_payload = json.dumps({
+        "data": [
+            {"value": "72", "value_classification": "Greed", "timestamp": "1700000000"}
+        ]
+    }).encode("utf-8")
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+        def read(self):
+            return self._payload
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("urllib.request.urlopen", return_value=FakeResponse(fake_payload)) as mock_urlopen:
+        result_str = executor.execute("get_market_sentiment", {})
+
+    parsed = json.loads(result_str)
+    assert parsed["value"] == 72
+    assert parsed["classification"] == "Greed"
+    assert parsed["timestamp"] == "1700000000"
+    # Verify the correct URL was requested
+    call_args = mock_urlopen.call_args
+    request_obj = call_args[0][0]
+    assert "api.alternative.me/fng" in request_obj.full_url
