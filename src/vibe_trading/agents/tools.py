@@ -171,7 +171,27 @@ class ToolExecutor:
         return df.to_dict(orient="records")
 
     def _get_indicators(self, symbol: str, timeframe: str = "4h") -> dict:
-        raise NotImplementedError
+        ts = self.current_timestamp or datetime.utcnow()
+        df = self.pipeline._get_candles(symbol, timeframe, ts, limit=300)
+        if df.empty:
+            return {"error": f"Not enough candles for {symbol} {timeframe} to compute indicators (need >= 50)"}
+        feats = self.pipeline._calculate_indicators(df)
+        latest = feats.iloc[-1]
+        return {
+            "rsi_14": float(latest["rsi_14"]),
+            "rsi_regime": self.pipeline._get_rsi_regime(latest["rsi_14"]),
+            "macd": float(latest["macd"]),
+            "macd_signal": float(latest["macd_signal"]),
+            "macd_hist": float(latest["macd_hist"]),
+            "macd_regime": self.pipeline._get_macd_regime(latest["macd_hist"]),
+            "adx_14": float(latest["adx_14"]),
+            "adx_regime": "strong_trend" if latest["adx_14"] >= 25.0 else "weak_trend",
+            "obv": float(latest["obv"]),
+            "obv_trend": self.pipeline._get_obv_trend(feats),
+            "ma20": float(latest["ma20"]),
+            "ma50": float(latest["ma50"]),
+            "ma200": float(latest["ma200"]),
+        }
 
     def _get_support_resistance(self, symbol: str) -> dict:
         raise NotImplementedError

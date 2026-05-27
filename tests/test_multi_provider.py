@@ -287,3 +287,56 @@ def test_get_candles_clamps_limit_and_returns_records():
     assert call_args[0][1] == "4h"
     assert call_args[0][2] == pinned_ts
     assert call_args[1]["limit"] == 50
+
+
+def test_get_indicators_returns_latest_with_regimes():
+    """Handler queries 300 candles, runs the indicator pipeline, returns latest row + regimes."""
+    executor, _, _ = _make_executor()
+    executor.set_timestamp(datetime(2026, 5, 27, 12))
+
+    # Build a candle df that already has indicator columns populated (mocking _calculate_indicators)
+    fake_raw = pd.DataFrame({
+        "timestamp": [datetime(2026, 5, 27, h) for h in range(0, 16, 4)],
+        "open": [100.0] * 4,
+        "high": [101.0] * 4,
+        "low": [99.0] * 4,
+        "close": [100.5] * 4,
+        "volume": [1000.0] * 4,
+    })
+    fake_feats = fake_raw.copy()
+    fake_feats["rsi_14"] = [50.0, 55.0, 65.0, 72.0]
+    fake_feats["macd"] = [0.1] * 4
+    fake_feats["macd_signal"] = [0.05] * 4
+    fake_feats["macd_hist"] = [0.05, 0.06, 0.07, 0.08]
+    fake_feats["adx_14"] = [20.0, 22.0, 26.0, 28.0]
+    fake_feats["obv"] = [1000.0, 1100.0, 1200.0, 1300.0]
+    fake_feats["ma20"] = [100.0] * 4
+    fake_feats["ma50"] = [99.0] * 4
+    fake_feats["ma200"] = [98.0] * 4
+
+    executor.pipeline._get_candles = MagicMock(return_value=fake_raw)
+    executor.pipeline._calculate_indicators = MagicMock(return_value=fake_feats)
+
+    result_str = executor.execute("get_indicators", {"symbol": "BTC/USDT", "timeframe": "4h"})
+    parsed = json.loads(result_str)
+
+    assert parsed["rsi_14"] == 72.0
+    assert parsed["rsi_regime"] == "overbought"  # >= 70
+    assert parsed["macd_hist"] == 0.08
+    assert parsed["macd_regime"] == "bullish_momentum_expanding"
+    assert parsed["adx_regime"] == "strong_trend"  # >= 25
+    assert "obv_trend" in parsed
+    assert parsed["ma20"] == 100.0
+
+    # _get_candles called with limit=300
+    call_kwargs = executor.pipeline._get_candles.call_args[1]
+    assert call_kwargs["limit"] == 300
+
+def test_get_indicators_returns_error_when_insufficient_candles():
+    """If fewer than 50 candles available, return an error dict (not crash)."""
+    executor, _, _ = _make_executor()
+    executor.pipeline._get_candles = MagicMock(return_value=pd.DataFrame())
+
+    result_str = executor.execute("get_indicators", {"symbol": "BTC/USDT", "timeframe": "4h"})
+    parsed = json.loads(result_str)
+    assert "error" in parsed
