@@ -93,3 +93,50 @@ def test_analyst_end_to_end_with_client_mock(mock_completion):
     call_kwargs = mock_completion.call_args[1]
     assert "gemini" in call_kwargs["model"]
 
+
+from vibe_trading.agents.trader import HeadTrader, HeadTraderOutput
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_trader_integration():
+    mock_client = MagicMock()
+    mock_client.call_llm.return_value = '{"action": "long", "stop_loss_strategy": "1.5_atr", "take_profit_strategy": "3.0_atr", "risk_reward_ratio": 2.0, "hold_period_bias": "medium", "reasoning_summary": "Strong trend confirmation."}'
+    
+    trader = HeadTrader(client=mock_client)
+    analyst_res = AnalystOutput(
+        market_bias="bullish",
+        volume_confirmation="confirmed",
+        thesis="Strong breakout",
+        nearest_support=95.0,
+        nearest_resistance=105.0,
+        confluence_score=0.8
+    )
+    
+    proposal = trader.decide("BTC/USDT", analyst_res, {}, [])
+    assert proposal["action"] == "long"
+    mock_client.call_llm.assert_called_once()
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_trader_end_to_end_with_client_mock(mock_completion):
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = '{"action": "long", "stop_loss_strategy": "1.5_atr", "take_profit_strategy": "3.0_atr", "risk_reward_ratio": 2.0, "hold_period_bias": "medium", "reasoning_summary": "Strong trend."}'
+    mock_completion.return_value = mock_response
+
+    trader = HeadTrader()
+    analyst_res = AnalystOutput(
+        market_bias="bullish",
+        volume_confirmation="confirmed",
+        thesis="Strong breakout",
+        nearest_support=95.0,
+        nearest_resistance=105.0,
+        confluence_score=0.8
+    )
+    proposal = trader.decide("BTC/USDT", analyst_res, {}, [])
+    assert proposal["action"] == "long"
+    mock_completion.assert_called_once()
+    call_kwargs = mock_completion.call_args[1]
+    assert call_kwargs["model"] == "gemini/gemini-3.1-flash-lite"
+
+

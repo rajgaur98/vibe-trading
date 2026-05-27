@@ -6,8 +6,9 @@ from uuid import uuid4
 from datetime import datetime
 from decimal import Decimal
 from langfuse import observe, propagate_attributes
-from vibe_trading.agents.client import GeminiClient
+from vibe_trading.agents.client import LLMClient
 from vibe_trading.agents.analyst import AnalystOutput
+
 
 class HeadTraderOutput(BaseModel):
     action: Literal["long", "short", "flat", "close"] = Field(
@@ -30,9 +31,11 @@ class HeadTraderOutput(BaseModel):
     )
 
 class HeadTrader:
-    def __init__(self, client: GeminiClient = None):
-        self.client = client or GeminiClient()
-        self.model = os.getenv("GEMINI_TRADER_MODEL", "gemini-3.1-flash-lite")
+    def __init__(self, client: LLMClient = None):
+        self.client = client or LLMClient()
+        provider = self.client.provider
+        self.model = os.getenv(f"{provider.upper()}_TRADER_MODEL") or os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
+
         
         self.system_instruction = """
 You are the Head Trader of a systematic crypto hedge fund. 
@@ -82,7 +85,7 @@ Provide your output strictly matching the Pydantic JSON schema.
 - Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
 - Always output a valid schema.
 """
-            raw_output = self.client.call_gemini(
+            raw_output = self.client.call_llm(
                 model_name=self.model,
                 system_instruction=self.system_instruction,
                 prompt=prompt,
