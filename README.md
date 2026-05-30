@@ -78,9 +78,14 @@ Open `.env` and enter your credentials:
 LLM_PROVIDER=gemini                              # gemini | openai | anthropic | groq | ollama
 LLM_MODEL=gemini-3.1-flash-lite                  # provider-native model id
 
+# Optional per-agent overrides (only honored when LLM_PROVIDER=gemini).
+# These take precedence over LLM_MODEL for the respective agent.
+# GEMINI_ANALYST_MODEL=gemma-4-31b-it
+# GEMINI_TRADER_MODEL=gemma-4-31b-it
+
 # Provide the key for whichever provider you selected
 GEMINI_API_KEY=your_google_ai_studio_api_key     # for LLM_PROVIDER=gemini
-# GROQ_API_KEY=your_groq_console_api_key         # for LLM_PROVIDER=groq (free tier, faster, way higher rate limits)
+# GROQ_API_KEY=your_groq_console_api_key         # for LLM_PROVIDER=groq
 # OPENAI_API_KEY=...                             # for LLM_PROVIDER=openai
 # ANTHROPIC_API_KEY=...                          # for LLM_PROVIDER=anthropic
 
@@ -88,10 +93,31 @@ DISCORD_WEBHOOK_URL=your_discord_webhook_url
 TRADING_MODE=PAPER
 ```
 
-**Recommended for fewer rate-limit headaches:** set `LLM_PROVIDER=groq` +
-`LLM_MODEL=llama-3.3-70b-versatile` (a 70B open-weights model on Groq's LPU
-hardware — ~280 tok/s, native tool-calling, and the free tier comfortably
-covers both the live scheduler and the full eval suite).
+#### Choosing a model — free-tier rate vs token limits
+
+Different free tiers fail in different ways. Check your provider's actual
+usage dashboard (e.g. <https://aistudio.google.com/usage>) — published docs
+often don't match what your account is actually provisioned. The eval suite
+is the stress case: one full run is ~56 calls / ~280K tokens in a short burst.
+
+| Option | Limits that bite | Best when |
+|--------|------------------|-----------|
+| **Gemini `gemma-4-31b-it`** (recommended) | 15 RPM, **Unlimited TPM**, 1,500 RPD | You want no token caps; bursty eval runs. Structured output + tool-calling both verified. |
+| Gemini `gemini-3.1-flash-lite` | 15 RPM, 250K TPM, 500 RPD | Live scheduler (~250 calls/day fits easily); rock-solid structured output. |
+| Gemini `2.5-flash` / `3.5-flash` | **20 RPD** | Avoid for eval — a single run exhausts the daily request cap. |
+| Groq `llama-3.3-70b-versatile` | ~30 RPM, but a **daily token cap (~100K TPD)** | High request rate with *small* prompts. The TPD cap exhausts fast on this project's indicator-heavy prompts. |
+
+**Recommended:** `LLM_PROVIDER=gemini` with `LLM_MODEL=gemma-4-31b-it`. Gemma 4
+on AI Studio has **no per-minute token cap** and 1,500 requests/day — the
+profile that suits this project's bursty, token-heavy eval workload. Only the
+15 RPM rate limit applies, which `--throttle-seconds 5` keeps you under. Both
+the trader's structured output and the analyst's tool-use loop are verified
+working on it.
+
+> **Note on Groq:** Groq's LPU hardware is genuinely fast (~280 tok/s) and its
+> *request* limits are generous, but its free tier imposes a **daily token
+> cap** that this project's ~5K-token analyst prompts blow through after a
+> couple of eval runs. Prefer it only for high-request, low-token workloads.
 
 ---
 
@@ -174,13 +200,19 @@ uv run python -m vibe_trading.eval.eval
 # After a prompt change you've reviewed and approved:
 uv run python -m vibe_trading.eval.eval --update-baseline
 
-# Use a different judge model (any LiteLLM-compatible identifier)
+# Override the judge model (defaults to your configured LLM_MODEL — a different
+# family here gives cross-model-family bias mitigation). Any LiteLLM id works.
 EVAL_JUDGE_MODEL=claude-3-5-haiku-20241022 uv run python -m vibe_trading.eval.eval
 
-# Increase the per-case throttle if you hit provider rate limits
-# (default 3s; raise to 8-10s for rate-limited tiers)
-uv run python -m vibe_trading.eval.eval --throttle-seconds 10
+# Increase the per-case throttle if you hit provider RATE limits
+# (default 3s; the committed baseline was produced on Gemma 4 31B at 5s)
+uv run python -m vibe_trading.eval.eval --throttle-seconds 5
 ```
+
+The judge defaults to whatever `LLM_MODEL` is set to, so switching `LLM_PROVIDER`
+flips all four call sites (analyst, trader, and both judges) together — no risk of
+the judge pointing at a model the active provider doesn't host. Set
+`EVAL_JUDGE_MODEL` only when you deliberately want a different judge.
 
 The golden-set YAMLs live in `evals/snapshots/` — 14 real cases derived from DuckDB
 candle history via `evals/scan_candidates.py` (regime bucketing) and labeled by
@@ -190,8 +222,9 @@ candidate timestamps.
 
 Reports land in `data/reports/eval-<timestamp>.json` (gitignored). The regression
 yardstick is `evals/baseline.json`, committed to git so prompt-impact diffs are
-reviewable in PRs. To seed the baseline on a fresh checkout, run with
-`--update-baseline` once — and use `--throttle-seconds 10` if your LLM provider's
-rate limit is tight, otherwise the first few cases may fail with `RateLimitError`
-and pollute the baseline.
+reviewable in PRs. The current baseline was produced on `gemma-4-31b-it` (chosen for
+its unlimited TPM — see the model-selection table above). To seed the baseline on a
+fresh checkout, run with `--update-baseline` once. If your provider has a tight
+**token** cap (e.g. Groq's TPD), prefer Gemma; if it has a tight **request** cap,
+raise `--throttle-seconds` so the per-minute bucket has time to refill.
 
