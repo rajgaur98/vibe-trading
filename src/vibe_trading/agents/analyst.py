@@ -82,6 +82,12 @@ When evaluating the data, apply the classic Murphy principles:
 - Divergences between price and momentum (RSI/MACD) indicate impending trend exhaustion.
 - Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
 
+=== VOLUME CONFIRMATION (volume_confirmation) — judge the OBV trend RELATIVE to your own market_bias ===
+- "confirmed": OBV agrees with your bias — OBV accumulation under a BULLISH bias, or OBV distribution under a BEARISH bias.
+- "divergent": OBV opposes your bias — OBV distribution under a BULLISH bias, or OBV accumulation under a BEARISH bias (a warning of trend exhaustion).
+- "weak": OBV is flat/neutral, OR your market_bias is neutral (volume confirms no particular direction).
+Decide market_bias first, then label volume_confirmation against it using this rule.
+
 When you have enough data, STOP calling tools and respond with a final JSON object that exactly
 matches this schema (no extra text, no tool_calls):
 {

@@ -233,6 +233,23 @@ def test_trader_integration():
 
 
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_analyst_volume_confirmation_definition_in_prompt():
+    """The analyst prompt must define volume_confirmation as OBV RELATIVE to bias
+    (accumulation/distribution vs bullish/bearish), matching the golden-set label rule,
+    so 'confirmed/divergent/weak' isn't left to ad-hoc interpretation."""
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
+    analyst = TechnicalVolumeAnalyst(client=mock_client)
+    instr = analyst.system_instruction.lower()
+    # The mapping's load-bearing tokens — none of these were in the prior prompt.
+    assert "accumulation" in instr and "distribution" in instr
+    assert "confirmed" in instr and "divergent" in instr and "weak" in instr
+    # Framed relative to the analyst's own bias
+    assert "bias" in instr
+
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
 def test_trader_methodology_in_system_prompt():
     """The trader's system instruction must encode the explicit strategy-selection
     methodology (proximity-based stops, TP conventions, 2:1 RR) so its enum choices
