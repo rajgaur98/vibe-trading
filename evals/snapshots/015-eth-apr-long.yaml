@@ -1,0 +1,31 @@
+id: 015-eth-apr-long
+description: 'Bullish Directional for ETH/USDT at 2026-04-15T16:00:00+00:00. Derived
+  labels: bias=bullish, volume=weak, confluence=0.75, trader_action=long. RSI=62.2
+  (approaching_overbought), MACD_hist=1.5620 (bullish_momentum_expanding), OBV=neutral,
+  ADX=33.4 (strong_trend).'
+symbol: ETH/USDT
+timestamp: 2026-04-15 16:00:00+00:00
+analyst_label:
+  market_bias: bullish
+  volume_confirmation: weak
+  nearest_support: 2302.9
+  nearest_resistance: 2386.02
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - bullish bias
+    - weak volume confirmation
+    must_not_mention:
+    - strong-conviction breakout call
+trader_label:
+  action: long
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: next_resistance
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - align with bullish bias
+    - asymmetric reward
+    must_not_mention:
+    - enter despite weak confluence

@@ -1,0 +1,31 @@
+id: 022-avax-mar-short
+description: 'Bearish Directional for AVAX/USDT at 2026-03-23T00:00:00+00:00. Derived
+  labels: bias=bearish, volume=weak, confluence=0.75, trader_action=short. RSI=32.7
+  (approaching_oversold), MACD_hist=-0.0238 (bearish_momentum_expanding), OBV=neutral,
+  ADX=43.4 (strong_trend).'
+symbol: AVAX/USDT
+timestamp: 2026-03-23 00:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: weak
+  nearest_support: 9.0
+  nearest_resistance: 8.97
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - bearish bias
+    - weak volume confirmation
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: short
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: 3.0_atr
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - align with bearish bias
+    - risk-managed entry
+    must_not_mention:
+    - fight the trend

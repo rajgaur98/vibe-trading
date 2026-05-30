@@ -51,6 +51,52 @@ def test_llm_client_initialization_anthropic_missing_key():
     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY environment variable is not set"):
         LLMClient()
 
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k"}, clear=True)
+def test_min_call_interval_defaults_to_zero():
+    """No throttle by default — live trading behavior unchanged."""
+    client = LLMClient()
+    assert client.min_call_interval == 0.0
+
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k", "LLM_MIN_CALL_INTERVAL_SECONDS": "4.5"}, clear=True)
+def test_min_call_interval_parsed_from_env():
+    client = LLMClient()
+    assert client.min_call_interval == 4.5
+
+
+@patch("vibe_trading.agents.client.time")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k", "LLM_MIN_CALL_INTERVAL_SECONDS": "4.0"}, clear=True)
+def test_throttle_sleeps_when_calls_too_close(mock_time):
+    """A second call within the interval sleeps for the remaining time; the gate is
+    shared across instances (the class-level last-call timestamp) so analyst/trader/
+    judge clients collectively respect one provider rate limit."""
+    LLMClient._last_call_at = 0.0  # reset shared class state
+    # monotonic() sequence: first _throttle sees t=100 (huge elapsed -> no sleep, sets last=100),
+    # second _throttle sees t=101 (1s elapsed -> wait 3s), then records t=104.
+    mock_time.monotonic.side_effect = [100.0, 100.0, 101.0, 104.0]
+    client = LLMClient()
+
+    client._throttle()
+    mock_time.sleep.assert_not_called()   # first call: no prior call to space from
+
+    client._throttle()
+    mock_time.sleep.assert_called_once()
+    waited = mock_time.sleep.call_args[0][0]
+    assert abs(waited - 3.0) < 1e-6        # 4.0 interval - 1.0 elapsed
+
+
+@patch("vibe_trading.agents.client.time")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k"}, clear=True)
+def test_throttle_noop_when_interval_zero(mock_time):
+    """interval=0 -> never sleeps (default / live path)."""
+    LLMClient._last_call_at = 0.0
+    mock_time.monotonic.return_value = 100.0
+    client = LLMClient()
+    client._throttle()
+    client._throttle()
+    mock_time.sleep.assert_not_called()
+
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key", "LLM_MODEL": "custom-gemini-model"})
 def test_llm_client_initialization_model_override():
     client = LLMClient()

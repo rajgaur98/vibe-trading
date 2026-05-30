@@ -191,25 +191,29 @@ def score_case(
         )
 
     field_scores: list[FieldScore] = [
-        # Analyst — categorical
+        # Analyst — always scored (independent of the trade decision)
         score_categorical("market_bias", result.analyst_output["market_bias"], case.analyst_label.market_bias),
         score_categorical("volume_confirmation", result.analyst_output["volume_confirmation"], case.analyst_label.volume_confirmation),
-        # Analyst — numeric
         score_numeric_tolerance("nearest_support", result.analyst_output["nearest_support"], case.analyst_label.nearest_support),
         score_numeric_tolerance("nearest_resistance", result.analyst_output["nearest_resistance"], case.analyst_label.nearest_resistance),
         score_numeric_tolerance("confluence_score", result.analyst_output["confluence_score"], case.analyst_label.confluence_score),
-        # Analyst — free text
         score_rubric("thesis", result.analyst_output.get("thesis", ""), case.analyst_label.thesis_rubric, judge),
-        # Trader — categorical
+        # Trader — the directional call and its rationale are always meaningful
         score_categorical("action", result.trader_output["action"], case.trader_label.action),
-        score_categorical("stop_loss_strategy", result.trader_output["stop_loss_strategy"], case.trader_label.stop_loss_strategy),
-        score_categorical("take_profit_strategy", result.trader_output["take_profit_strategy"], case.trader_label.take_profit_strategy),
-        score_categorical("hold_period_bias", result.trader_output["hold_period_bias"], case.trader_label.hold_period_bias),
-        # Trader — numeric
-        score_numeric_tolerance("risk_reward_ratio", float(result.trader_output["risk_reward_ratio"]), case.trader_label.risk_reward_ratio),
-        # Trader — free text
         score_rubric("reasoning_summary", result.trader_output.get("reasoning_summary", ""), case.trader_label.reasoning_rubric, judge),
     ]
+
+    # Entry-strategy fields only carry meaning when the label calls for entering a
+    # position. On a 'flat' label there is no position to size/stop/exit, so these
+    # fields have no ground truth — scoring them against placeholder labels would
+    # just inject noise. Score them only for directional (long/short) labels.
+    if case.trader_label.action != "flat":
+        field_scores.extend([
+            score_categorical("stop_loss_strategy", result.trader_output["stop_loss_strategy"], case.trader_label.stop_loss_strategy),
+            score_categorical("take_profit_strategy", result.trader_output["take_profit_strategy"], case.trader_label.take_profit_strategy),
+            score_categorical("hold_period_bias", result.trader_output["hold_period_bias"], case.trader_label.hold_period_bias),
+            score_numeric_tolerance("risk_reward_ratio", float(result.trader_output["risk_reward_ratio"]), case.trader_label.risk_reward_ratio),
+        ])
 
     analyst_field_scores = [fs for fs in field_scores if fs.field in ANALYST_FIELDS]
     trader_field_scores = [fs for fs in field_scores if fs.field in TRADER_FIELDS]

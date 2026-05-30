@@ -1,5 +1,7 @@
 import json
 import os
+import time
+import threading
 import logging
 import litellm
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -40,14 +42,38 @@ _PROVIDER_API_KEY_ENV = {
 
 
 class LLMClient:
+    # Class-level rate-limit gate shared across ALL instances. The analyst, trader,
+    # and eval judge each construct their own LLMClient but hit the same provider
+    # quota, so the minimum-interval spacing must be global, not per-instance.
+    _last_call_at: float = 0.0
+    _throttle_lock = threading.Lock()
+
     def __init__(self):
         self.provider = os.getenv("LLM_PROVIDER", "gemini").lower()
         self.model = os.getenv("LLM_MODEL", "gemini-3.1-flash-lite")
+
+        # Minimum seconds between consecutive LLM calls across all clients. Default 0
+        # (no throttle — live trading is unaffected). The eval sets this to stay under
+        # the provider's RPM limit (e.g. 4.5s ≈ 13 RPM, safely below Gemini's 15 RPM),
+        # which avoids tripping rate limits and the long retry backoffs that follow.
+        self.min_call_interval = float(os.getenv("LLM_MIN_CALL_INTERVAL_SECONDS", "0"))
 
         # Dynamic key validation for active provider only
         required_key = _PROVIDER_API_KEY_ENV.get(self.provider)
         if required_key and not os.getenv(required_key):
             raise ValueError(f"{required_key} environment variable is not set. Please check your .env file.")
+
+    def _throttle(self) -> None:
+        """Block until at least `min_call_interval` seconds have passed since the last
+        call by any client instance. No-op when the interval is 0."""
+        if self.min_call_interval <= 0:
+            return
+        with LLMClient._throttle_lock:
+            elapsed = time.monotonic() - LLMClient._last_call_at
+            wait = self.min_call_interval - elapsed
+            if wait > 0:
+                time.sleep(wait)
+            LLMClient._last_call_at = time.monotonic()
 
     @retry(
         # 5 attempts with backoff 4 → 8 → 16 → 32 → 60s ≈ 120s total max wait —
@@ -72,7 +98,8 @@ class LLMClient:
         """
         model_str = get_litellm_model_string(self.provider, model_name)
         logger.info(f"Calling LLM provider={self.provider} model={model_str}...")
-        
+        self._throttle()
+
         messages = [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": prompt}
@@ -112,6 +139,7 @@ class LLMClient:
 
         for iteration in range(max_iterations):
             logger.info(f"Tool-use loop iteration {iteration + 1}/{max_iterations} (model={model_str})")
+            self._throttle()
             response = litellm.completion(
                 model=model_str,
                 messages=messages,

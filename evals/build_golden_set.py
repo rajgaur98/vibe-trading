@@ -61,6 +61,18 @@ CANDIDATES: list[tuple[str, str, str, str]] = [
 
     # Bullish price / OBV divergent (textbook fakeout setup)
     ("SUI/USDT",   "2026-01-28T00:00:00Z", "bullish_price_obv_divergent",     "sui-volume-divergence"),
+
+    # --- Directional LONG cases (derivation yields action=long; exercise entry-strategy fields) ---
+    ("ETH/USDT",   "2026-04-15T16:00:00Z", "bullish_directional",             "eth-apr-long"),
+    ("SOL/USDT",   "2026-02-25T16:00:00Z", "bullish_directional",             "sol-feb-long"),
+    ("SUI/USDT",   "2026-03-16T04:00:00Z", "bullish_directional",             "sui-mar-long"),
+    ("BTC/USDT",   "2026-04-08T08:00:00Z", "bullish_directional",             "btc-apr-long"),
+
+    # --- Directional SHORT cases (derivation yields action=short; diverse symbols) ---
+    ("ETH/USDT",   "2026-02-10T12:00:00Z", "bearish_directional",             "eth-feb-short"),
+    ("LINK/USDT",  "2026-03-26T12:00:00Z", "bearish_directional",             "link-mar-short"),
+    ("NEAR/USDT",  "2026-03-26T08:00:00Z", "bearish_directional",             "near-mar-short"),
+    ("AVAX/USDT",  "2026-03-23T00:00:00Z", "bearish_directional",             "avax-mar-short"),
 ]
 
 

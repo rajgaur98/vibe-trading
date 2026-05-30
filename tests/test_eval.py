@@ -494,10 +494,56 @@ def test_score_case_one_mismatch_reduces_total():
     result.analyst_output["market_bias"] = "bearish"
 
     cs = score_case(result, case, _passing_judge_stub)
-    # 11 scored fields total (6 analyst incl. thesis, 5 trader incl. reasoning). 1 fails -> 10/11.
+    # Valid fixture is directional (long), so all 12 fields scored; 1 analyst field fails.
     assert cs.total_score < 1.0
     assert cs.analyst_score < 1.0
     assert cs.trader_score == 1.0
+
+
+def test_score_case_flat_label_skips_entry_strategy_fields():
+    """On a 'flat' label the trader is scored only on action + reasoning_summary.
+
+    The entry-strategy fields (stop_loss_strategy, take_profit_strategy,
+    hold_period_bias, risk_reward_ratio) have no ground truth on a no-trade
+    decision, so they are excluded — scoring them against placeholder labels was
+    measuring noise.
+    """
+    case = _load_valid_case()
+    case.trader_label.action = "flat"
+    result = _build_perfect_result(case)
+    result.trader_output["action"] = "flat"  # correctly declines
+    # The LLM still emits (irrelevant) entry-strategy values — they must be IGNORED.
+    result.trader_output["stop_loss_strategy"] = "2.0_atr"
+    result.trader_output["take_profit_strategy"] = "4.0_atr"
+    result.trader_output["hold_period_bias"] = "long"
+    result.trader_output["risk_reward_ratio"] = 9.9
+
+    cs = score_case(result, case, _passing_judge_stub)
+    scored = {fs.field for fs in cs.field_scores}
+
+    # Entry-strategy fields excluded from scoring on a flat label
+    assert "stop_loss_strategy" not in scored
+    assert "take_profit_strategy" not in scored
+    assert "hold_period_bias" not in scored
+    assert "risk_reward_ratio" not in scored
+    # action + reasoning_summary still scored
+    assert "action" in scored
+    assert "reasoning_summary" in scored
+    # Trader score = mean(action=1.0, reasoning=1.0) = 1.0 despite the wrong entry-strategy values
+    assert cs.trader_score == 1.0
+
+
+def test_score_case_directional_label_scores_all_trader_fields():
+    """On a directional (long/short) label, all six trader fields are scored."""
+    case = _load_valid_case()
+    case.trader_label.action = "long"
+    result = _build_perfect_result(case)
+
+    cs = score_case(result, case, _passing_judge_stub)
+    scored = {fs.field for fs in cs.field_scores}
+    for f in ["action", "stop_loss_strategy", "take_profit_strategy",
+              "hold_period_bias", "risk_reward_ratio", "reasoning_summary"]:
+        assert f in scored, f"{f} should be scored on a directional label"
 
 
 def test_score_case_snapshot_failure_propagates():
@@ -724,6 +770,7 @@ def test_main_returns_zero_with_no_baseline(
         "--snapshots", str(snapshots),
         "--baseline", str(baseline),
         "--reports-dir", str(reports),
+        "--throttle-seconds", "0",
     ])
     assert rc == 0
     # A report file should have been written
@@ -762,6 +809,7 @@ def test_main_returns_one_on_regression(
         "--snapshots", str(snapshots),
         "--baseline", str(baseline),
         "--reports-dir", str(reports),
+        "--throttle-seconds", "0",
     ])
     assert rc == 1
 
@@ -789,6 +837,7 @@ def test_main_update_baseline_writes_baseline(
         "--baseline", str(baseline),
         "--reports-dir", str(reports),
         "--update-baseline",
+        "--throttle-seconds", "0",
     ])
     assert rc == 0
     assert baseline.exists()
@@ -806,8 +855,49 @@ def test_main_returns_one_when_no_cases_found(mock_load_cases, tmp_path):
         "--snapshots", str(snapshots),
         "--baseline", str(tmp_path / "baseline.json"),
         "--reports-dir", str(tmp_path / "reports"),
+        "--throttle-seconds", "0",
     ])
     assert rc == 1
+
+
+@patch("vibe_trading.eval.eval.build_judge")
+@patch("vibe_trading.eval.eval.run_case")
+@patch("vibe_trading.eval.eval.Database")
+@patch("vibe_trading.eval.eval.load_cases")
+def test_main_scores_all_cases_in_parallel(
+    mock_load_cases, mock_db_cls, mock_run_case, mock_build_judge, tmp_path
+):
+    """Parallel orchestration: every case is scored, results preserve case identity,
+    and each worker gets its own Database (thread isolation)."""
+    import copy
+    base = _load_valid_case()
+    cases = []
+    for i in range(3):
+        c = copy.deepcopy(base)
+        c.id = f"case-{i}"
+        cases.append(c)
+    mock_load_cases.return_value = cases
+    mock_db_cls.return_value = MagicMock()
+    mock_run_case.side_effect = lambda case, db: _build_perfect_result(case)
+    mock_build_judge.return_value = _passing_judge_stub
+
+    reports = tmp_path / "reports"
+    rc = main([
+        "--snapshots", str(tmp_path / "snap"),
+        "--baseline", str(tmp_path / "baseline.json"),
+        "--reports-dir", str(reports),
+        "--throttle-seconds", "0",
+        "--max-workers", "3",
+    ])
+    assert rc == 0
+
+    report_files = list(reports.glob("eval-*.json"))
+    assert report_files, "a report should have been written"
+    data = json.loads(report_files[0].read_text())
+    assert data["case_count"] == 3
+    assert set(data["per_case"].keys()) == {"case-0", "case-1", "case-2"}
+    # One Database per case → confirms per-thread isolation (not a shared connection)
+    assert mock_db_cls.call_count == 3
 
 
 @patch("vibe_trading.eval.runner.HeadTrader")
