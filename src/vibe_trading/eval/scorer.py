@@ -170,8 +170,11 @@ class CaseScore(BaseModel):
 
 ANALYST_FIELDS = {"market_bias", "volume_confirmation", "nearest_support",
                   "nearest_resistance", "confluence_score", "thesis"}
+# hold_period_bias is intentionally excluded: its golden-set label ('medium') is a
+# hardcoded default, not a derivable signal, so scoring it measured noise (10/10
+# mismatch in the prior baseline). It still appears in HeadTraderOutput for live use.
 TRADER_FIELDS = {"action", "stop_loss_strategy", "take_profit_strategy",
-                 "risk_reward_ratio", "hold_period_bias", "reasoning_summary"}
+                 "risk_reward_ratio", "reasoning_summary"}
 
 
 def score_case(
@@ -211,7 +214,6 @@ def score_case(
         field_scores.extend([
             score_categorical("stop_loss_strategy", result.trader_output["stop_loss_strategy"], case.trader_label.stop_loss_strategy),
             score_categorical("take_profit_strategy", result.trader_output["take_profit_strategy"], case.trader_label.take_profit_strategy),
-            score_categorical("hold_period_bias", result.trader_output["hold_period_bias"], case.trader_label.hold_period_bias),
             score_numeric_tolerance("risk_reward_ratio", float(result.trader_output["risk_reward_ratio"]), case.trader_label.risk_reward_ratio),
         ])
 

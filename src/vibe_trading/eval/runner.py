@@ -133,7 +133,11 @@ def run_case(case: EvalCase, db: Database) -> CaseResult:
 
     try:
         trader = HeadTrader()
-        trader_output = trader.decide(case.symbol, labeled_analyst_output, FIXED_SCORECARD, FIXED_OPEN_POSITIONS)
+        # Current price from the snapshot drives the trader's proximity-based stop selection.
+        trader_output = trader.decide(
+            case.symbol, labeled_analyst_output, FIXED_SCORECARD, FIXED_OPEN_POSITIONS,
+            current_price=float(snapshot.get("close", 0.0)),
+        )
     except Exception as e:
         logger.warning(f"Trader failed for {case.id}: {e}")
         return CaseResult(

@@ -170,7 +170,7 @@ class TradingScheduler:
                     
                     # Step 2: Head Trader decision (database is fully closed during this slow API call!)
                     open_positions = self.broker.get_open_positions()
-                    proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions)
+                    proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions, current_price=current_price)
                     
                     # Step 3: Log decision to database
                     self.pg_db.connect()

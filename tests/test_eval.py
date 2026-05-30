@@ -533,8 +533,9 @@ def test_score_case_flat_label_skips_entry_strategy_fields():
     assert cs.trader_score == 1.0
 
 
-def test_score_case_directional_label_scores_all_trader_fields():
-    """On a directional (long/short) label, all six trader fields are scored."""
+def test_score_case_directional_label_scores_entry_strategy_fields():
+    """On a directional (long/short) label, the meaningful trader fields are scored:
+    action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary."""
     case = _load_valid_case()
     case.trader_label.action = "long"
     result = _build_perfect_result(case)
@@ -542,8 +543,20 @@ def test_score_case_directional_label_scores_all_trader_fields():
     cs = score_case(result, case, _passing_judge_stub)
     scored = {fs.field for fs in cs.field_scores}
     for f in ["action", "stop_loss_strategy", "take_profit_strategy",
-              "hold_period_bias", "risk_reward_ratio", "reasoning_summary"]:
+              "risk_reward_ratio", "reasoning_summary"]:
         assert f in scored, f"{f} should be scored on a directional label"
+
+
+def test_score_case_never_scores_hold_period_bias():
+    """hold_period_bias is dropped from scoring entirely — the label default ('medium')
+    is arbitrary and not derivable, so scoring it just injected noise."""
+    case = _load_valid_case()
+    # Directional: even here, hold_period_bias must NOT be scored.
+    case.trader_label.action = "long"
+    result = _build_perfect_result(case)
+    cs = score_case(result, case, _passing_judge_stub)
+    scored = {fs.field for fs in cs.field_scores}
+    assert "hold_period_bias" not in scored
 
 
 def test_score_case_snapshot_failure_propagates():

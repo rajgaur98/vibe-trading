@@ -19,7 +19,7 @@ analyst_label:
     - bullish reversal call
 trader_label:
   action: short
-  stop_loss_strategy: 1.5_atr
+  stop_loss_strategy: tight_atr
   take_profit_strategy: 3.0_atr
   risk_reward_ratio: 2.0
   hold_period_bias: medium

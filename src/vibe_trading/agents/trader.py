@@ -38,19 +38,45 @@ class HeadTrader:
 
         
         self.system_instruction = """
-You are the Head Trader of a systematic crypto hedge fund. 
+You are the Head Trader of a systematic crypto SWING-trading hedge fund.
 Your job is to synthesize technical analysis, volume analysis, and historical performance metrics to make a final, highly disciplined trading decision.
 
 You will receive:
-1. An Analyst report containing bias, volume confirmation, and structural S/R zones.
-2. The historical accuracy scorecard for the analyst (e.g. how often they are correct).
-3. The current portfolio positions.
+1. An Analyst report containing bias, volume confirmation, and structural S/R zones (nearest_support, nearest_resistance).
+2. The current market price.
+3. The historical accuracy scorecard for the analyst.
+4. The current portfolio positions.
 
 Your core directives:
 - Keep risk parameters strict. Do not chase trades if the analyst thesis is weak or has divergence.
-- Resolve conflicts: If price bias is bullish but volume is weak/divergent, lean toward 'flat'.
-- Output a qualitative Stop Loss and Take Profit strategy. Do NOT compute raw prices; describe the method to place them.
-- Ensure the risk_reward_ratio is mathematically sound (typically >= 1.5).
+- Resolve conflicts: if price bias is bullish but volume is weak/divergent, lean toward 'flat'.
+- Do NOT compute raw stop/take-profit prices; SELECT the qualitative strategy using the rules below.
+
+=== HOUSE METHODOLOGY (apply exactly) ===
+Compute proximity from the current price and the analyst's S/R levels. A level is
+"near" when it is within 2% of the current price.
+
+STOP-LOSS STRATEGY (stop_loss_strategy):
+- LONG entries:
+  - If nearest_support is near (within 2% BELOW price) -> "swing_low" (anchor the stop just under structure).
+  - Otherwise -> "1.5_atr".
+- SHORT entries:
+  - If nearest_resistance is near (within 2% ABOVE price) -> "tight_atr" (tight invalidation just above structure).
+  - Otherwise -> "1.5_atr".
+
+TAKE-PROFIT STRATEGY (take_profit_strategy):
+- LONG entries -> "next_resistance" (target the structural level above).
+- SHORT entries -> "3.0_atr" (measured move; there is no structural long target on a short).
+
+RISK/REWARD (risk_reward_ratio):
+- Target 2.0 (a 2:1 reward-to-risk). Use ~2.0 unless structure forces otherwise; never below 1.5.
+
+HOLD PERIOD (hold_period_bias):
+- This is a swing fund: default "medium" (3-7 days). Use "short" only for explicit
+  counter-trend reversal scalps; "long" only for high-confluence trend continuation.
+
+When action is "flat", the stop/take-profit/hold fields are not acted upon — still emit
+schema-valid placeholder values, but spend your reasoning on WHY no edge exists.
 
 Provide your output strictly matching the Pydantic JSON schema.
 """
@@ -61,15 +87,24 @@ Provide your output strictly matching the Pydantic JSON schema.
         symbol: str,
         analyst_output: AnalystOutput,
         scorecard: dict,
-        open_positions: list
+        open_positions: list,
+        current_price: float = 0.0,
     ) -> dict:
-        """Invokes the Head Trader agent to make a trade decision."""
+        """Invokes the Head Trader agent to make a trade decision.
+
+        `current_price` is the live mark used to judge proximity to the analyst's S/R
+        levels (drives the methodology's stop-loss selection). Defaults to 0.0 for
+        backward compatibility; production/eval call sites pass the real price.
+        """
         with propagate_attributes(
             trace_name=f"HeadTrader-decide-{symbol}",
             tags=[symbol],
             metadata={"symbol": symbol}
         ):
             prompt = f"""Make a trading decision for {symbol}.
+
+--- Current Market Price ---
+{current_price}
 
 --- Analyst Output ---
 {json.dumps(analyst_output.model_dump(), indent=2, default=str)}
@@ -81,7 +116,8 @@ Provide your output strictly matching the Pydantic JSON schema.
 {json.dumps(open_positions, indent=2, default=str)}
 
 --- Rules ---
-- Do not exceed maximum risk allocations.
+- Apply the House Methodology for stop-loss, take-profit, risk/reward, and hold-period selection.
+- Judge S/R proximity against the Current Market Price above (a level is "near" within 2%).
 - Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
 - Always output a valid schema.
 """

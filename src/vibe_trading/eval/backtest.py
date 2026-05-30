@@ -140,7 +140,8 @@ class BacktestEngine:
             open_positions = self.broker.get_open_positions()
 
             analyst_res = analyst.analyze(symbol=symbol, timestamp=timestamp)
-            proposal = trader.decide(symbol, analyst_res, scorecard, open_positions)
+            proposal = trader.decide(symbol, analyst_res, scorecard, open_positions,
+                                     current_price=float(snapshot.get("close", 0.0)))
             return proposal
         else:
             # Deterministic Mock Trading Agent (Simulates technical vibes)

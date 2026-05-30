@@ -232,6 +232,39 @@ def test_trader_integration():
     mock_client.call_llm.assert_called_once()
 
 
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_trader_methodology_in_system_prompt():
+    """The trader's system instruction must encode the explicit strategy-selection
+    methodology (proximity-based stops, TP conventions, 2:1 RR) so its enum choices
+    are principled rather than ad hoc."""
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
+    trader = HeadTrader(client=mock_client)
+    instr = trader.system_instruction.lower()
+    assert "swing_low" in instr and "1.5_atr" in instr        # stop selection
+    assert "next_resistance" in instr and "3.0_atr" in instr  # take-profit selection
+    assert "2:1" in instr or "2.0" in instr                   # risk/reward target
+    assert "2%" in instr or "2 %" in instr                    # proximity threshold
+
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_trader_decide_includes_current_price_in_prompt():
+    """current_price must be passed to the LLM so it can apply proximity-based stops."""
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
+    mock_client.call_llm.return_value = '{"action": "long", "stop_loss_strategy": "swing_low", "take_profit_strategy": "next_resistance", "risk_reward_ratio": 2.0, "hold_period_bias": "medium", "reasoning_summary": "x"}'
+    trader = HeadTrader(client=mock_client)
+    analyst_res = AnalystOutput(
+        market_bias="bullish", volume_confirmation="confirmed", thesis="t",
+        nearest_support=99.0, nearest_resistance=105.0, confluence_score=0.8,
+    )
+    trader.decide("BTC/USDT", analyst_res, {}, [], current_price=100.0)
+    prompt = mock_client.call_llm.call_args.kwargs["prompt"]
+    assert "100.0" in prompt  # current price surfaced to the model
+
+
 @patch("litellm.completion")
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"}, clear=True)
 def test_trader_end_to_end_with_client_mock(mock_completion):

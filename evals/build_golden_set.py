@@ -251,19 +251,25 @@ def build_case_dict(
     confluence = derive_confluence_score(snapshot)
     action = derive_trader_action(market_bias, confluence, snapshot)
 
-    # Trader strategy defaults — keep deterministic and defensible
+    # Trader strategy labels — encode the SAME house methodology the trader prompt
+    # uses, and depend ONLY on signals the trader can also see (current price vs the
+    # analyst's S/R levels => proximity). A level is "near" within 2%, which is exactly
+    # the pipeline's very_close / immediate_contact proximity buckets.
+    #   LONG  stop: swing_low if support near, else 1.5_atr; TP next_resistance.
+    #   SHORT stop: tight_atr if resistance near, else 1.5_atr; TP 3.0_atr.
+    #   RR target 2.0. hold_period_bias is not scored (kept 'medium' for completeness).
     if action == "long":
         stop_loss_strategy = "swing_low" if snapshot["support_proximity"] in {"very_close", "immediate_contact"} else "1.5_atr"
         take_profit_strategy = "next_resistance"
         risk_reward_ratio = 2.0
         hold_period_bias = "medium"
     elif action == "short":
-        stop_loss_strategy = "tight_atr" if category == "overbought_exhaustion" else "1.5_atr"
+        stop_loss_strategy = "tight_atr" if snapshot["resistance_proximity"] in {"very_close", "immediate_contact"} else "1.5_atr"
         take_profit_strategy = "3.0_atr"
         risk_reward_ratio = 2.0
-        hold_period_bias = "short" if category == "overbought_exhaustion" else "medium"
+        hold_period_bias = "medium"
     else:  # flat
-        stop_loss_strategy = "1.5_atr"  # placeholder; not used when flat
+        stop_loss_strategy = "1.5_atr"  # placeholder; not scored when flat
         take_profit_strategy = "risk_reward_multiplier"
         risk_reward_ratio = 1.5
         hold_period_bias = "medium"
