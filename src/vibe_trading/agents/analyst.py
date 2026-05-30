@@ -3,11 +3,31 @@ from typing import Literal, Optional
 from datetime import datetime
 import json
 import os
+import re
 from langfuse import observe, propagate_attributes
 from vibe_trading.agents.client import LLMClient
 from vibe_trading.agents.tools import ANALYST_TOOLS, ToolExecutor
 from vibe_trading.data.db import Database
 from vibe_trading.data.fetcher import DataFetcher
+
+
+def _extract_json(text: str) -> str:
+    """Return a JSON string ready for json.loads, tolerating markdown code fences.
+
+    The legacy snapshot path passes `response_format=AnalystOutput`, which yields a
+    bare JSON object. The tool-use path can't set `response_format` mid-loop, so the
+    model's final answer is unconstrained freeform — and some models (notably Gemma,
+    occasionally Gemini) wrap it in ```json ... ``` fences. This strips those fences
+    so both paths parse cleanly; bare JSON passes through unchanged.
+    """
+    if not text:
+        return ""
+    text = text.strip()
+    if text.startswith("```"):
+        # Drop the opening fence (``` or ```json) and any trailing closing fence.
+        text = re.sub(r"^```(?:json)?\s*\n?", "", text)
+        text = re.sub(r"\n?```\s*$", "", text)
+    return text.strip()
 
 
 class AnalystOutput(BaseModel):
@@ -123,5 +143,5 @@ matches this schema (no extra text, no tool_calls):
                     response_schema=AnalystOutput,
                 )
 
-            data = json.loads(raw_output)
+            data = json.loads(_extract_json(raw_output))
             return AnalystOutput(**data)

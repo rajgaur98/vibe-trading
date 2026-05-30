@@ -76,7 +76,56 @@ def test_call_llm(mock_completion):
         temperature=0.1
     )
 
-from vibe_trading.agents.analyst import TechnicalVolumeAnalyst, AnalystOutput
+from vibe_trading.agents.analyst import TechnicalVolumeAnalyst, AnalystOutput, _extract_json
+
+
+def test_extract_json_passthrough_for_clean_json():
+    """A bare JSON object is returned unchanged (legacy response_format path)."""
+    assert _extract_json('{"market_bias": "bullish"}') == '{"market_bias": "bullish"}'
+
+
+def test_extract_json_strips_json_fences():
+    """Markdown ```json fences (Gemma's tool-loop final answer) are stripped."""
+    fenced = '```json\n{"market_bias": "bearish", "confluence_score": 0.5}\n```'
+    assert _extract_json(fenced) == '{"market_bias": "bearish", "confluence_score": 0.5}'
+
+
+def test_extract_json_strips_bare_fences():
+    """Bare ``` fences (no language tag) are stripped."""
+    fenced = '```\n{"a": 1}\n```'
+    assert _extract_json(fenced) == '{"a": 1}'
+
+
+def test_extract_json_strips_surrounding_whitespace():
+    """Leading/trailing whitespace and newlines around fenced JSON are removed."""
+    fenced = '\n\n```json\n{"a": 1}\n```\n\n'
+    assert _extract_json(fenced) == '{"a": 1}'
+
+
+def test_extract_json_handles_none():
+    """None input returns empty string (so json.loads fails with a clear error, not a TypeError)."""
+    assert _extract_json(None) == ""
+
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_analyst_tool_loop_parses_fenced_json():
+    """End-to-end: when the tool-loop returns markdown-fenced JSON, analyze() still parses it."""
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemma-4-31b-it"
+    mock_client.call_llm_with_tools.return_value = (
+        '```json\n{"market_bias": "bearish", "volume_confirmation": "divergent", '
+        '"thesis": "fenced thesis", "nearest_support": 60000.0, '
+        '"nearest_resistance": 67000.0, "confluence_score": 0.5}\n```'
+    )
+    db, fetcher = MagicMock(), MagicMock()
+    analyst = TechnicalVolumeAnalyst(client=mock_client, db=db, fetcher=fetcher)
+    res = analyst.analyze(symbol="BTC/USDT", timestamp=datetime(2026, 5, 26))
+    assert isinstance(res, AnalystOutput)
+    assert res.market_bias == "bearish"
+    assert res.confluence_score == 0.5
+    mock_client.call_llm_with_tools.assert_called_once()
+
 
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
 def test_analyst_integration():
@@ -138,7 +187,7 @@ def test_trader_integration():
 
 
 @patch("litellm.completion")
-@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"}, clear=True)
 def test_trader_end_to_end_with_client_mock(mock_completion):
     mock_response = MagicMock()
     mock_response.choices = [MagicMock()]
