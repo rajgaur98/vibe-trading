@@ -82,6 +82,16 @@ When evaluating the data, apply the classic Murphy principles:
 - Divergences between price and momentum (RSI/MACD) indicate impending trend exhaustion.
 - Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
 
+=== MARKET BIAS (market_bias) — require CONFLUENCE; never force a direction on mixed signals ===
+Tally four equally-weighted votes — do NOT over-weight any single oscillator:
+1. MACD histogram: positive = 1 bullish vote; negative = 1 bearish vote.
+2. RSI(14): >= 55 = 1 bullish vote; <= 45 = 1 bearish vote; between 45 and 55 = no vote.
+3. OBV trend: accumulation = 1 bullish vote; distribution = 1 bearish vote; flat = no vote.
+4. Trend strength: when ADX signals a strong trend, cast 1 vote in the MACD's direction.
+Call "bullish" only when bullish votes exceed bearish votes by 2 or more; "bearish" only when
+bearish exceed bullish by 2 or more; otherwise "neutral". A lone oversold/overbought RSI reading,
+or a single OBV print, is NOT enough for a directional call — conflicting signals resolve to neutral.
+
 === VOLUME CONFIRMATION (volume_confirmation) — judge the OBV trend RELATIVE to your own market_bias ===
 - "confirmed": OBV agrees with your bias — OBV accumulation under a BULLISH bias, or OBV distribution under a BEARISH bias.
 - "divergent": OBV opposes your bias — OBV distribution under a BULLISH bias, or OBV accumulation under a BEARISH bias (a warning of trend exhaustion).

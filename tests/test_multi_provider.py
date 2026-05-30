@@ -233,6 +233,24 @@ def test_trader_integration():
 
 
 @patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
+def test_analyst_market_bias_confluence_rule_in_prompt():
+    """The analyst prompt must define market_bias as an equal-weight confluence vote
+    (MACD/RSI/OBV/ADX) requiring a net edge of 2+, else neutral — matching the
+    golden-set label rule — so it stops forcing a direction on mixed signals."""
+    mock_client = MagicMock()
+    mock_client.provider = "gemini"
+    mock_client.model = "gemini-3.1-flash-lite"
+    analyst = TechnicalVolumeAnalyst(client=mock_client)
+    instr = analyst.system_instruction.lower()
+    # RSI vote thresholds (55/45) are distinctive to the new rule
+    assert "55" in instr and "45" in instr
+    assert "vote" in instr
+    # The 2+ net-confluence requirement and the neutral default
+    assert ("2 or more" in instr) or ("by 2" in instr) or ("by two" in instr)
+    assert "neutral" in instr
+
+
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "test_gemini_key"})
 def test_analyst_volume_confirmation_definition_in_prompt():
     """The analyst prompt must define volume_confirmation as OBV RELATIVE to bias
     (accumulation/distribution vs bullish/bearish), matching the golden-set label rule,
