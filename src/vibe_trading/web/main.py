@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from vibe_trading.data.db import Database, PostgresDatabase
 from vibe_trading.agents.cost import daily_summary
 from vibe_trading.runtime.scheduler import TradingScheduler
+from vibe_trading.web.live_positions import live_testnet_positions
 
 app = FastAPI(title="Vibe Trading API", description="REST endpoints for Vibe Trading Dashboard")
 
@@ -163,6 +164,12 @@ def get_costs():
 
 @app.get("/api/positions")
 def get_positions():
+    if os.getenv("TRADING_MODE", "PAPER").upper() == "LIVE_TESTNET":
+        live = live_testnet_positions()
+        if live is not None:
+            return live
+        # else: fall through to the Postgres ledger path below
+
     positions = []
     with get_pg_conn() as conn:
         try:
