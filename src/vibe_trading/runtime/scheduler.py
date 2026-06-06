@@ -123,24 +123,7 @@ class TradingScheduler:
                         
                 # Update positions (internally connects and closes DuckDB inside PaperBroker)
                 closed_trades = self.broker.update_positions(current_prices)
-                if closed_trades:
-                    self.pg_db.connect()
-                    try:
-                        for trade in closed_trades:
-                            # Log closed trade to DB
-                            self.pg_db.conn.execute("""
-                                INSERT INTO trades (trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (trade["trade_id"], trade["symbol"], trade["action"], trade["entry_time"], trade["entry_price"],
-                                  trade["close_time"], trade["close_price"], trade["size_usd"], trade["realized_pnl"], trade["result"]))
-                            
-                            self._send_discord_alert(
-                                f"🔄 **TRADE CLOSED:** {trade['symbol']} ({trade['action'].upper()})\n"
-                                f"Entry: ${trade['entry_price']:.2f} | Exit: ${trade['close_price']:.2f}\n"
-                                f"PnL: **${trade['realized_pnl']:.2f}** ({trade['result'].upper()})"
-                            )
-                    finally:
-                        self.pg_db.close()
+                self._record_closed_trades(closed_trades)
                 
                 # 3. Check for new entry signals — unless the hard LLM-spend cap is hit.
                 # Existing positions were already updated above and keep being managed;
@@ -253,6 +236,30 @@ class TradingScheduler:
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")
+
+    def _record_closed_trades(self, closed_trades: list):
+        """Persist closed trades to `trades` and send Discord alerts. Thread-safe: opens
+        its OWN pooled PostgresDatabase connection per call (the web layer uses this same
+        pattern), so the 4h-tick thread and the ws-listener thread can both call it."""
+        if not closed_trades:
+            return
+        pg = PostgresDatabase()
+        pg.connect()
+        try:
+            for trade in closed_trades:
+                pg.conn.execute("""
+                    INSERT INTO trades (trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (trade["trade_id"], trade["symbol"], trade["action"], trade["entry_time"], trade["entry_price"],
+                      trade["close_time"], trade["close_price"], trade["size_usd"], trade["realized_pnl"], trade["result"]))
+        finally:
+            pg.close()
+        for trade in closed_trades:
+            self._send_discord_alert(
+                f"🔄 **TRADE CLOSED:** {trade['symbol']} ({trade['action'].upper()})\n"
+                f"Entry: ${trade['entry_price']:.2f} | Exit: ${trade['close_price']:.2f}\n"
+                f"PnL: **${trade['realized_pnl']:.2f}** ({trade['result'].upper()})"
+            )
 
     def _resolve_exec_price(self, sym: str, fallback: float) -> float:
         """Execution-critical price: the broker's futures mark when available
