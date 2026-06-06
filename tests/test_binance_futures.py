@@ -168,3 +168,35 @@ def test_get_balance_reads_usdt_total_and_tracks_peak():
     ex.fetch_balance.return_value = {"USDT": {"total": 8000.0}}
     assert broker.get_balance() == 8000.0
     assert broker.peak_balance == 8500.0
+
+
+def test_get_open_positions_maps_exchange_and_brackets():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [
+        {"symbol": "BTC/USDT:USDT", "contracts": 0.5, "side": "long",
+         "entryPrice": 100.0, "notional": 50.0, "markPrice": 105.0},
+        {"symbol": "DOGE/USDT:USDT", "contracts": 0.0},  # flat → skipped
+    ]
+    ex.fetch_open_orders.return_value = [
+        {"type": "stop_market", "stopPrice": 95.0},
+        {"type": "take_profit_market", "stopPrice": 110.0},
+    ]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    positions = broker.get_open_positions()
+
+    assert len(positions) == 1
+    p = positions[0]
+    assert p["symbol"] == "BTC/USDT"          # un-converted (plain)
+    assert p["side"] == "long"
+    assert p["entry_price"] == 100.0
+    assert p["size_usd"] == 50.0
+    assert p["stop_price"] == 95.0
+    assert p["take_profit_price"] == 110.0
+    assert p["current_price"] == 105.0
+
+
+def test_get_open_positions_empty_on_error():
+    ex = _mock_exchange()
+    ex.fetch_positions.side_effect = Exception("boom")
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    assert broker.get_open_positions() == []

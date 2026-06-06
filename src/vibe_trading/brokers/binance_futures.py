@@ -134,7 +134,48 @@ class BinanceFuturesBroker(BaseBroker):
             self.db.close()
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
-        raise NotImplementedError
+        try:
+            raw = self.exchange.fetch_positions()
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: fetch_positions failed: {e}")
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for p in raw:
+            contracts = float(p.get("contracts") or 0)
+            if contracts == 0:
+                continue
+            ccxt_sym = p.get("symbol", "")
+            plain = _to_plain_symbol(ccxt_sym)
+            entry = float(p.get("entryPrice") or 0)
+            notional = abs(float(p.get("notional") or (contracts * entry)))
+            mark = float(p.get("markPrice") or 0) or None
+
+            stop_price = None
+            take_profit_price = None
+            try:
+                for o in self.exchange.fetch_open_orders(ccxt_sym):
+                    otype = (o.get("type") or "").upper()
+                    sp = o.get("stopPrice") or (o.get("info", {}) or {}).get("stopPrice")
+                    if sp is None:
+                        continue
+                    if "TAKE_PROFIT" in otype:
+                        take_profit_price = float(sp)
+                    elif "STOP" in otype:
+                        stop_price = float(sp)
+            except Exception as e:
+                logger.warning(f"BinanceFuturesBroker: fetch_open_orders failed for {plain}: {e}")
+
+            out.append({
+                "symbol": plain,
+                "side": p.get("side"),
+                "entry_price": entry,
+                "size_usd": notional,
+                "stop_price": stop_price,
+                "take_profit_price": take_profit_price,
+                "current_price": mark,
+            })
+        return out
 
     def get_balance(self) -> float:
         if self.dry_run:
