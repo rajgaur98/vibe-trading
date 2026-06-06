@@ -38,14 +38,18 @@ class UserDataStreamListener:
 
     @staticmethod
     def _default_client():
-        ex = ccxtpro.binance({
+        # Binance Futures DEMO TRADING — no set_sandbox_mode (dropped for futures in ccxt 4.5+);
+        # demo-scoped keys run against the normal production endpoints.
+        return ccxtpro.binance({
             "apiKey": os.getenv("BINANCE_TESTNET_API_KEY"),
             "secret": os.getenv("BINANCE_TESTNET_API_SECRET"),
             "enableRateLimit": True,
-            "options": {"defaultType": "future"},
+            "options": {
+                "defaultType": "future",
+                "fetchCurrencies": False,
+                "fetchMarkets": {"types": ["linear"]},
+            },
         })
-        ex.set_sandbox_mode(True)
-        return ex
 
     def _handle_orders(self, orders: list):
         """Sync, unit-testable. Triggers a reconcile when any update is an exit fill."""

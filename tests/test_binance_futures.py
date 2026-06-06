@@ -22,6 +22,9 @@ def _mock_exchange():
     ex.fetch_ticker.return_value = {"last": 100.0}
     # market entry fills at avg 100.0
     ex.create_order.return_value = {"id": "x1", "average": 100.0, "price": 100.0}
+    # default: a position is already open so submit_order's _await_position poll returns
+    # immediately (tests that exercise reconcile/close override this explicitly).
+    ex.fetch_positions.return_value = [{"contracts": 1.0}]
     return ex
 
 
@@ -81,6 +84,30 @@ def test_submit_order_long_places_entry_and_brackets():
     assert a2.args[2] == "sell"
     assert a2.kwargs["params"]["closePosition"] is True
     assert float(a2.kwargs["params"]["stopPrice"]) == 95.0
+
+
+def test_submit_order_rolls_back_entry_if_brackets_fail():
+    ex = _mock_exchange()
+    # entry succeeds; the TP bracket raises → we must roll back the naked entry.
+    def _ce(*args, **kwargs):
+        if args[1] == "TAKE_PROFIT_MARKET":
+            raise Exception("bracket boom")
+        return {"id": "o", "average": 100.0, "price": 100.0}
+    ex.create_order.side_effect = _ce
+    ex.fetch_positions.return_value = [{"symbol": "BTC/USDT:USDT", "contracts": 0.5, "side": "long"}]
+
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=1000.0,
+        stop_price=95.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    assert res["status"] == "rejected"
+    assert "bracket" in res["reason"]
+    # rollback issued a reduce-only market close + cancelled leftover orders
+    ex.cancel_all_orders.assert_called_once_with("BTC/USDT:USDT")
+    last = ex.create_order.call_args_list[-1]
+    assert last.args[1] == "market" and last.args[2] == "sell"
+    assert last.kwargs["params"]["reduceOnly"] is True
 
 
 def test_submit_order_short_flips_sides():
@@ -179,9 +206,11 @@ def test_get_open_positions_maps_exchange_and_brackets():
          "entryPrice": 100.0, "notional": 50.0, "markPrice": 105.0},
         {"symbol": "DOGE/USDT:USDT", "contracts": 0.0},  # flat → skipped
     ]
+    # closePosition brackets come back as CONDITIONAL orders (type normalized to "market",
+    # trigger via triggerPrice, reduceOnly). TP/SL distinguished by trigger vs entry (100).
     ex.fetch_open_orders.return_value = [
-        {"type": "stop_market", "stopPrice": 95.0},
-        {"type": "take_profit_market", "stopPrice": 110.0},
+        {"type": "market", "triggerPrice": 110.0, "reduceOnly": True},  # above entry → TP
+        {"type": "market", "triggerPrice": 95.0, "reduceOnly": True},   # below entry → SL
     ]
     broker = BinanceFuturesBroker(db=None, exchange=ex)
     positions = broker.get_open_positions()
@@ -195,6 +224,8 @@ def test_get_open_positions_maps_exchange_and_brackets():
     assert p["stop_price"] == 95.0
     assert p["take_profit_price"] == 110.0
     assert p["current_price"] == 105.0
+    # conditional orders must be fetched with the stop/trigger flag, not the plain call
+    assert ex.fetch_open_orders.call_args.kwargs.get("params") == {"stop": True}
 
 
 def test_get_open_positions_empty_on_error():

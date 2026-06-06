@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from typing import Dict, Any, List, Optional
 from uuid import uuid4
@@ -9,6 +10,26 @@ import ccxt
 from vibe_trading.brokers.base import BaseBroker
 
 logger = logging.getLogger(__name__)
+
+
+# Binance Futures DEMO TRADING REST base (demo.binance.com → "Futures Demo API Base
+# Endpoint"). Demo keys are valid ONLY here — not on the deprecated futures testnet
+# (testnet.binancefuture.com) and not on production (fapi.binance.com).
+DEMO_FAPI_URL = os.getenv("BINANCE_DEMO_FAPI_URL", "https://demo-fapi.binance.com")
+
+
+def _route_to_demo(exchange) -> None:
+    """Point ccxt's USDⓂ-futures REST URLs at the demo-trading endpoint, replacing the
+    deprecated set_sandbox_mode (which ccxt 4.5+ removed for futures)."""
+    versions = {
+        "fapiPublic": "v1", "fapiPublicV2": "v2", "fapiPublicV3": "v3",
+        "fapiPrivate": "v1", "fapiPrivateV2": "v2", "fapiPrivateV3": "v3",
+    }
+    for url_key, ver in versions.items():
+        if url_key in exchange.urls["api"]:
+            exchange.urls["api"][url_key] = f"{DEMO_FAPI_URL}/fapi/{ver}"
+    if "fapiData" in exchange.urls["api"]:
+        exchange.urls["api"]["fapiData"] = f"{DEMO_FAPI_URL}/futures/data"
 
 
 def _to_ccxt_symbol(symbol: str) -> str:
@@ -45,9 +66,19 @@ class BinanceFuturesBroker(BaseBroker):
             "apiKey": key,
             "secret": secret,
             "enableRateLimit": True,
-            "options": {"defaultType": "future"},
+            # A futures-only demo key cannot authenticate the SPOT/margin SAPI endpoints
+            # that load_markets() hits by default (-2008). Skip currencies and restrict
+            # market loading to USDⓂ futures ("linear") — both load via public fapi endpoints.
+            "options": {
+                "defaultType": "future",
+                "fetchCurrencies": False,
+                "fetchMarkets": {"types": ["linear"]},
+            },
         })
-        self.exchange.set_sandbox_mode(True)  # routes to testnet.binancefuture.com
+        # Route to Binance Futures DEMO TRADING (demo-fapi.binance.com). We do NOT call
+        # set_sandbox_mode (ccxt 4.5+ dropped it for futures); demo keys are scoped to a
+        # demo account and only authenticate against this endpoint — no real funds.
+        _route_to_demo(self.exchange)
         self.exchange.load_markets()
         logger.info(f"BinanceFuturesBroker initialized (dry_run={self.dry_run}, leverage={self.leverage}x)")
 
@@ -89,14 +120,26 @@ class BinanceFuturesBroker(BaseBroker):
                 return {"status": "dry_run", "entry_price": mark, "order_ids": {}}
 
             entry_order = self.exchange.create_order(sym, "market", entry_side, qty)
-            tp_order = self.exchange.create_order(
-                sym, "TAKE_PROFIT_MARKET", exit_side, None,
-                params={"stopPrice": tp, "closePosition": True},
-            )
-            sl_order = self.exchange.create_order(
-                sym, "STOP_MARKET", exit_side, None,
-                params={"stopPrice": sl, "closePosition": True},
-            )
+            # The closePosition brackets are rejected (-4509) if the market entry's fill
+            # hasn't registered as a position yet — a real propagation race on demo/prod.
+            # Wait (bounded) for the position before attaching the brackets.
+            self._await_position(sym)
+            try:
+                tp_order = self.exchange.create_order(
+                    sym, "TAKE_PROFIT_MARKET", exit_side, None,
+                    params={"stopPrice": tp, "closePosition": True},
+                )
+                sl_order = self.exchange.create_order(
+                    sym, "STOP_MARKET", exit_side, None,
+                    params={"stopPrice": sl, "closePosition": True},
+                )
+            except Exception as e:
+                # Entry filled but a bracket failed → we'd be holding a NAKED, unprotected
+                # position. Roll the entry back immediately rather than leave it exposed.
+                logger.error(f"BinanceFuturesBroker: bracket placement failed for {symbol}, "
+                             f"rolling back the entry: {e}")
+                self._rollback_entry(sym)
+                return {"status": "rejected", "reason": f"bracket placement failed: {e}"}
 
             avg = float(entry_order.get("average") or entry_order.get("price") or mark)
             self._persist_position(symbol, action, avg, size_usd, stop_price, take_profit_price)
@@ -114,6 +157,35 @@ class BinanceFuturesBroker(BaseBroker):
         except Exception as e:
             logger.error(f"BinanceFuturesBroker: submit_order failed for {symbol}: {e}")
             return {"status": "rejected", "reason": str(e)}
+
+    def _rollback_entry(self, sym: str) -> None:
+        """Close any open position for `sym` (reduce-only market) and cancel leftover
+        orders. Used to undo a just-filled entry when its protective brackets failed to
+        attach, so we never hold a naked, unprotected position."""
+        try:
+            positions = self.exchange.fetch_positions([sym])
+            pos = next((p for p in positions if float(p.get("contracts") or 0) != 0), None)
+            if pos:
+                contracts = abs(float(pos["contracts"]))
+                opp = "sell" if pos.get("side") == "long" else "buy"
+                self.exchange.create_order(sym, "market", opp, contracts, params={"reduceOnly": True})
+            self.exchange.cancel_all_orders(sym)
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: rollback failed for {sym}: {e}")
+
+    def _await_position(self, sym: str, attempts: int = 10, delay: float = 0.3) -> bool:
+        """Poll (bounded) until the just-submitted market entry registers as an open
+        position, so the closePosition brackets aren't rejected with -4509. Returns True
+        once a non-zero position is seen, False if it never appears within the budget."""
+        for _ in range(attempts):
+            try:
+                positions = self.exchange.fetch_positions([sym])
+            except Exception:
+                return False
+            if any(abs(float(p.get("contracts") or 0)) > 0 for p in positions):
+                return True
+            time.sleep(delay)
+        return False
 
     def _persist_position(self, symbol, side, entry_price, size_usd, stop_price, take_profit_price):
         """Write the open position to the Postgres ledger (no-op when db is None).
@@ -147,6 +219,7 @@ class BinanceFuturesBroker(BaseBroker):
                 continue
             ccxt_sym = p.get("symbol", "")
             plain = _to_plain_symbol(ccxt_sym)
+            side = p.get("side")
             entry = float(p.get("entryPrice") or 0)
             notional = abs(float(p.get("notional") or (contracts * entry)))
             mark = float(p.get("markPrice") or 0) or None
@@ -154,17 +227,26 @@ class BinanceFuturesBroker(BaseBroker):
             stop_price = None
             take_profit_price = None
             try:
-                for o in self.exchange.fetch_open_orders(ccxt_sym):
-                    otype = (o.get("type") or "").upper()
-                    sp = o.get("stopPrice") or (o.get("info", {}) or {}).get("stopPrice")
-                    if sp is None:
+                # closePosition TP/SL are CONDITIONAL (trigger) orders: the plain
+                # fetch_open_orders returns nothing — params={'stop': True} fetches them.
+                # ccxt normalizes their `type` to "market", so we classify TP vs SL by the
+                # trigger price relative to the entry + side, not the type string.
+                ref = entry or mark or 0.0
+                for o in self.exchange.fetch_open_orders(ccxt_sym, params={"stop": True}):
+                    trig = o.get("triggerPrice") or o.get("stopPrice")
+                    if trig is None:
                         continue
-                    if "TAKE_PROFIT" in otype:
-                        take_profit_price = float(sp)
-                    elif "STOP" in otype:
-                        stop_price = float(sp)
+                    trig = float(trig)
+                    if side == "short":
+                        is_tp = trig <= ref
+                    else:  # long (default)
+                        is_tp = trig >= ref
+                    if is_tp:
+                        take_profit_price = trig
+                    else:
+                        stop_price = trig
             except Exception as e:
-                logger.warning(f"BinanceFuturesBroker: fetch_open_orders failed for {plain}: {e}")
+                logger.warning(f"BinanceFuturesBroker: fetch conditional orders failed for {plain}: {e}")
 
             out.append({
                 "symbol": plain,
