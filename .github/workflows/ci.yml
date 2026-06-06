@@ -1,0 +1,75 @@
+# ============================================================
+# CI – hermetic pytest suite (no secrets required)
+#
+# What this runs:
+#   uv run pytest -v
+#   ~130 unit tests across tests/; all LLM calls are mocked,
+#   no network access, no API keys, no Postgres needed.
+#
+# What is NOT here by design:
+#   The LLM eval baseline gate (`python -m vibe_trading.eval.eval`)
+#   requires live LLM provider credentials (Gemini/OpenAI/etc.),
+#   a running Postgres database, and costs real money + takes
+#   several minutes per run.  It is therefore a LOCAL pre-merge
+#   step, not a default CI job.
+#
+#   Extension path: if you want to add an optional eval gate,
+#   add a second job with `on: workflow_dispatch` (or a separate
+#   workflow file) guarded by `if: secrets.GEMINI_API_KEY != ''`
+#   so it only runs when the relevant secrets are present in the
+#   repo/environment and is never triggered automatically.
+# ============================================================
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: pytest (Python 3.12)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------------
+      # TA-Lib native C library
+      # The Python TA-Lib wheel requires the native C library to
+      # be present at build time.  Ubuntu's apt repos do not ship
+      # it, so we download the official source tarball and build
+      # it ourselves (the standard approach used by most CI setups).
+      # ----------------------------------------------------------
+      - name: Install TA-Lib C library from source
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential wget
+          wget -q https://github.com/TA-Lib/ta-lib/releases/download/v0.4.0/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib/
+          ./configure --prefix=/usr
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+      # ----------------------------------------------------------
+      # Python toolchain: uv + Python 3.12
+      # ----------------------------------------------------------
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      # ----------------------------------------------------------
+      # Install project dependencies (including dev extras so
+      # pytest and hypothesis are available)
+      # ----------------------------------------------------------
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      # ----------------------------------------------------------
+      # Run the hermetic unit test suite
+      # ----------------------------------------------------------
+      - name: Run pytest
+        run: uv run pytest -v
