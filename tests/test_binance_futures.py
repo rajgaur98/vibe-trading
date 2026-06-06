@@ -33,6 +33,15 @@ def test_to_ccxt_symbol():
     assert _to_ccxt_symbol("ETH/USDT") == "ETH/USDT:USDT"
 
 
+def test_route_to_demo_points_fapi_at_demo():
+    import ccxt
+    from vibe_trading.brokers.binance_futures import _route_to_demo
+    ex = ccxt.binance({"options": {"defaultType": "future"}})
+    _route_to_demo(ex)
+    assert ex.urls["api"]["fapiPrivate"].startswith("https://demo-fapi.binance.com")
+    assert ex.urls["api"]["fapiPublic"].startswith("https://demo-fapi.binance.com")
+
+
 def test_init_injected_exchange_does_not_touch_network():
     ex = _mock_exchange()
     broker = BinanceFuturesBroker(db=None, exchange=ex)

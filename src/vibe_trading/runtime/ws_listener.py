@@ -38,9 +38,10 @@ class UserDataStreamListener:
 
     @staticmethod
     def _default_client():
-        # Binance Futures DEMO TRADING — no set_sandbox_mode (dropped for futures in ccxt 4.5+);
-        # demo-scoped keys run against the normal production endpoints.
-        return ccxtpro.binance({
+        # Binance Futures DEMO TRADING. Route REST to demo-fapi (the listenKey is created +
+        # kept alive there) AND point the futures user-data ws stream at demo-fstream.
+        from vibe_trading.brokers.binance_futures import _route_to_demo
+        ex = ccxtpro.binance({
             "apiKey": os.getenv("BINANCE_TESTNET_API_KEY"),
             "secret": os.getenv("BINANCE_TESTNET_API_SECRET"),
             "enableRateLimit": True,
@@ -50,6 +51,11 @@ class UserDataStreamListener:
                 "fetchMarkets": {"types": ["linear"]},
             },
         })
+        _route_to_demo(ex)  # REST fapi → demo-fapi.binance.com
+        demo_ws = os.getenv("BINANCE_DEMO_FSTREAM_URL", "wss://demo-fstream.binance.com/ws")
+        if isinstance(ex.urls["api"].get("ws"), dict):
+            ex.urls["api"]["ws"]["future"] = demo_ws  # user-data stream → demo-fstream
+        return ex
 
     def _handle_orders(self, orders: list):
         """Sync, unit-testable. Triggers a reconcile when any update is an exit fill."""

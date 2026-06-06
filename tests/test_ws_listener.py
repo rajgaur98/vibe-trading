@@ -88,3 +88,10 @@ def test_start_is_idempotent_and_stop_clears_running(monkeypatch):
     listener.stop()
     assert listener._running is False
     time.sleep(0.05)  # let the daemon thread wind down
+
+
+def test_default_client_routes_to_demo():
+    # Construction is offline (no load_markets); just assert the demo routing is applied.
+    ex = UserDataStreamListener._default_client()
+    assert "demo-fapi.binance.com" in ex.urls["api"]["fapiPrivate"]
+    assert ex.urls["api"]["ws"]["future"] == "wss://demo-fstream.binance.com/ws"
