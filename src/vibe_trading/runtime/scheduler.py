@@ -19,6 +19,7 @@ from vibe_trading.brokers.risk import RiskManager
 from vibe_trading.brokers.paper import PaperBroker
 from vibe_trading.brokers.coinbase import CoinbaseBroker
 from vibe_trading.brokers.binance_futures import BinanceFuturesBroker
+from vibe_trading.runtime.decision_pipeline import DecisionPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,14 @@ class TradingScheduler:
         
         # Keep track of analyst scorecard (mock in v1)
         self.scorecard = {"accuracy": 0.55, "total_decisions": 50}
+
+        # The per-symbol agent decision graph (analyst -> trader -> risk), extracted
+        # from sync_and_evaluate into a small, testable runner. All side effects
+        # (persistence, audit, order submission, alerts) stay in the scheduler.
+        self.decision_pipeline = DecisionPipeline(
+            self.analyst, self.trader, self.risk_manager, self.pipeline, self.broker,
+            scorecard=self.scorecard, trace_id_fn=self._current_trace_id,
+        )
 
     def start(self):
         """Starts the main scheduling loop."""
@@ -163,32 +172,21 @@ class TradingScheduler:
                     last_ts, current_price = last_candle_ts_res
 
                     # Execution-critical price: futures mark in LIVE_TESTNET, else spot close.
-                    # TA below still uses spot candles; only entry/proximity price is aligned.
+                    # TA still uses spot candles; only the entry/proximity price is aligned.
                     exec_price = self._resolve_exec_price(sym, current_price)
 
-                    # Step 1: Analyst agent evaluation via tool-use loop
-                    # (the analyst opens its own short-lived DB connections via the ToolExecutor)
-                    try:
-                        analyst_report = self.analyst.analyze(symbol=sym, timestamp=last_ts)
-                    except RuntimeError as e:
-                        logger.error(f"Analyst tool-loop failed for {sym}: {e}. Skipping symbol.")
+                    # Run the agent decision graph (analyst -> snapshot -> trader -> risk).
+                    # Pure orchestration; every side effect below is owned by the scheduler.
+                    result = self.decision_pipeline.run_symbol(sym, last_ts, exec_price)
+                    if result.status in ("analyst_failed", "no_snapshot"):
                         continue
 
-                    # Build the deterministic snapshot for downstream RiskManager + decision_log audit.
-                    snapshot = self.pipeline.run(sym, last_ts)
-                    if not snapshot:
-                        continue
-                    
-                    # Step 2: Head Trader decision (database is fully closed during this slow API call!)
-                    open_positions = self.broker.get_open_positions()
-                    proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions, current_price=exec_price)
-                    
-                    # Capture the current Langfuse trace id so a decision can be joined to
-                    # its trace. sync_and_evaluate is @observe-decorated, so we're inside a
-                    # span here. Fail-safe: any Langfuse hiccup → trace_id stays None.
-                    trace_id = self._current_trace_id()
+                    proposal = result.proposal
+                    snapshot = result.snapshot
+                    trace_id = result.trace_id
+                    analyst_report = result.analyst_report
 
-                    # Step 3: Log decision to database
+                    # Log decision to database (every decision, including FLAT).
                     self.pg_db.connect()
                     try:
                         self.pg_db.conn.execute("""
@@ -221,22 +219,12 @@ class TradingScheduler:
                         "snapshot": snapshot,
                     })
 
-                    if proposal["action"] == "flat":
+                    if result.status == "flat":
                         logger.info(f"Head Trader decided FLAT for {sym}. Reasoning: {proposal['reasoning_summary']}")
                         continue
-                    
-                    # Step 4: Risk Manager evaluation (pipeline._get_candles internally connects and closes DB)
-                    df_4h = self.pipeline._get_candles(sym, "4h", last_ts, limit=30)
-                    risk_res = self.risk_manager.evaluate_proposal(
-                        proposal=proposal,
-                        current_price=exec_price,
-                        df_4h=df_4h,
-                        account_balance=self.broker.get_balance(),
-                        peak_balance=self.broker.peak_balance,
-                        open_positions=open_positions,
-                        snapshot=snapshot
-                    )
-                    
+
+                    # Risk Manager outcome (computed inside the decision pipeline).
+                    risk_res = result.risk_result
                     if risk_res["approved"]:
                         # Submit order to broker (internally connects and closes DuckDB inside PaperBroker)
                         # Pass entry_price so the live paper-trading path fills the position
