@@ -81,6 +81,7 @@ def load_cases(snapshots_dir: Path) -> list[EvalCase]:
 from vibe_trading.agents.analyst import TechnicalVolumeAnalyst, AnalystOutput
 from vibe_trading.agents.trader import HeadTrader
 from vibe_trading.data.db import Database
+from vibe_trading.data.fetcher import DataFetcher
 from vibe_trading.features.pipeline import FeaturePipeline
 
 
@@ -89,8 +90,17 @@ FIXED_SCORECARD = {"accuracy": 0.55, "total_decisions": 100}
 FIXED_OPEN_POSITIONS: list = []
 
 
-def run_case(case: EvalCase, db: Database) -> CaseResult:
-    """Run one eval case: build snapshot, run analyst (snapshot path), run trader with LABELED analyst output.
+def run_case(case: EvalCase, db: Database, analyst_path: str = "snapshot") -> CaseResult:
+    """Run one eval case: build snapshot, run analyst, run trader with LABELED analyst output.
+
+    `analyst_path` selects which analyst code path to exercise:
+      - "snapshot" (default): the fast, single-call legacy path — analyze(symbol, snapshot=...).
+        Deterministic, ~1 LLM call/case; the regression-gate default.
+      - "tool-loop": the SAME multi-turn tool-use path production runs —
+        analyze(symbol, timestamp) with a live Database+DataFetcher-backed ToolExecutor.
+        Slower / more LLM calls, but verifies exactly what ships.
+    The snapshot is always built (cheap, deterministic) for the trader's current_price and
+    the snapshot_ok gate, regardless of which analyst path runs.
 
     The trader is intentionally fed `case.analyst_label` instead of the actual analyst output so
     trader scoring isolates trader-specific regressions from analyst-specific regressions.
@@ -108,10 +118,15 @@ def run_case(case: EvalCase, db: Database) -> CaseResult:
         logger.warning(f"FeaturePipeline.run returned empty snapshot for {case.id} ({case.symbol} @ {case.timestamp})")
         return CaseResult(case_id=case.id, snapshot_ok=False, error="empty snapshot — insufficient candle history?")
 
-    # Analyst — explicit no db/fetcher so the tool-loop path is NOT taken
+    # Analyst — snapshot path (no db/fetcher) by default; tool-loop path (db+fetcher,
+    # timestamp-driven) when analyst_path="tool-loop" to mirror exactly what prod runs.
     try:
-        analyst = TechnicalVolumeAnalyst(db=None, fetcher=None)
-        actual_analyst_output = analyst.analyze(symbol=case.symbol, snapshot=snapshot)
+        if analyst_path == "tool-loop":
+            analyst = TechnicalVolumeAnalyst(db=db, fetcher=DataFetcher())
+            actual_analyst_output = analyst.analyze(symbol=case.symbol, timestamp=case.timestamp)
+        else:
+            analyst = TechnicalVolumeAnalyst(db=None, fetcher=None)
+            actual_analyst_output = analyst.analyze(symbol=case.symbol, snapshot=snapshot)
     except Exception as e:
         logger.warning(f"Analyst failed for {case.id}: {e}")
         return CaseResult(

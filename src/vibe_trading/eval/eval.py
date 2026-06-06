@@ -47,6 +47,12 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "wall-clock is bounded by the throttle, not by calls x latency.")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress per-case progress logging.")
+    parser.add_argument("--analyst-path", choices=["snapshot", "tool-loop"], default="snapshot",
+                        help="Which analyst code path to evaluate. 'snapshot' (default): the fast "
+                             "single-call path — the regression-gate default; the committed baseline "
+                             "is measured on it. 'tool-loop': the SAME multi-turn tool-use path "
+                             "production runs (slower, more LLM calls, different scores → needs its "
+                             "own --update-baseline). Use it to verify what actually ships.")
     args = parser.parse_args(argv)
 
     if not args.quiet:
@@ -76,7 +82,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         # Each task gets its OWN Database — DuckDB connections are not safe to share
         # across threads, and run_case opens/closes short-lived connections internally.
         try:
-            result = run_case(case, Database())
+            result = run_case(case, Database(), analyst_path=args.analyst_path)
             score = score_case(result, case, judge)
         except Exception as e:  # defensive: one bad case must not abort the whole run
             logger.warning(f"Case {case.id} crashed during scoring: {e}")
@@ -90,8 +96,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # global RPM regardless of worker count, so more workers only fill the pipeline up to
     # the throttle ceiling — they never exceed it.
     results: list[Optional[CaseScore]] = [None] * total
-    logger.info(f"Scoring {total} cases | {args.max_workers} workers | "
-                f"min {args.throttle_seconds}s between LLM calls")
+    logger.info(f"Scoring {total} cases | analyst-path={args.analyst_path} | "
+                f"{args.max_workers} workers | min {args.throttle_seconds}s between LLM calls")
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as pool:
         futures = [pool.submit(_process, (i, c)) for i, c in enumerate(cases)]

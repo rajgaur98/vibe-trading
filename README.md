@@ -209,7 +209,19 @@ EVAL_JUDGE_MODEL=claude-3-5-haiku-20241022 uv run python -m vibe_trading.eval.ev
 # Increase the per-case throttle if you hit provider RATE limits
 # (default 3s; the committed baseline was produced on Gemma 4 31B at 5s)
 uv run python -m vibe_trading.eval.eval --throttle-seconds 5
+
+# Evaluate the SAME tool-use path production runs (slower, more LLM calls).
+# Default is the fast snapshot path (what the committed baseline measures);
+# the tool-loop path produces different scores and needs its own --update-baseline.
+uv run python -m vibe_trading.eval.eval --analyst-path tool-loop
 ```
+
+**Eval vs prod path.** By default the eval exercises the analyst's fast single-call
+*snapshot* path (cheap, deterministic — the regression-gate default the committed
+baseline is measured on). Production runs the multi-turn *tool-use* path. To verify
+exactly what ships, run `--analyst-path tool-loop`; it makes ~6× the LLM calls per case
+(much slower on a high-latency model) and yields different scores, so seed it with its
+own `--update-baseline` rather than comparing against the snapshot baseline.
 
 The judge defaults to whatever `LLM_MODEL` is set to, so switching `LLM_PROVIDER`
 flips all four call sites (analyst, trader, and both judges) together — no risk of

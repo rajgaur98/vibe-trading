@@ -945,3 +945,56 @@ def test_suite_report_pass_rate_excludes_schema_failures():
     report = SuiteReport.from_scores([cs_passing, cs_schema_fail])
     assert report.pass_rate == 0.5  # 1 of 2 cases passes; the schema-failed one is NOT a pass
     assert report.schema_failures == 1
+
+
+@patch("vibe_trading.eval.runner.HeadTrader")
+@patch("vibe_trading.eval.runner.TechnicalVolumeAnalyst")
+@patch("vibe_trading.eval.runner.FeaturePipeline")
+def test_run_case_tool_loop_path_uses_db_fetcher_and_timestamp(mock_pipeline_cls, mock_analyst_cls, mock_trader_cls):
+    """analyst_path='tool-loop' constructs the analyst WITH db+fetcher and calls
+    analyze(symbol, timestamp) (no snapshot) — the same path prod runs."""
+    case = _load_valid_case()
+    mock_pipeline_cls.return_value.run.return_value = {"symbol": case.symbol, "close": 100.0}
+    mock_analyst_cls.return_value.analyze.return_value = AnalystOutput(
+        market_bias="bullish", volume_confirmation="confirmed", thesis="t",
+        nearest_support=95.0, nearest_resistance=105.0, confluence_score=0.7,
+    )
+    mock_trader_cls.return_value.decide.return_value = {
+        "action": "long", "stop_loss_strategy": "1.5_atr", "take_profit_strategy": "next_resistance",
+        "risk_reward_ratio": 2.0, "hold_period_bias": "medium", "reasoning_summary": "ok",
+    }
+
+    run_case(case, MagicMock(), analyst_path="tool-loop")
+
+    # Constructed WITH db + fetcher (tool-loop enabled)
+    init_kwargs = mock_analyst_cls.call_args.kwargs
+    assert init_kwargs.get("db") is not None
+    assert init_kwargs.get("fetcher") is not None
+    # Called with timestamp (tool-loop), NOT a snapshot
+    analyze_kwargs = mock_analyst_cls.return_value.analyze.call_args.kwargs
+    assert analyze_kwargs.get("timestamp") == case.timestamp
+    assert "snapshot" not in analyze_kwargs
+
+
+@patch("vibe_trading.eval.runner.HeadTrader")
+@patch("vibe_trading.eval.runner.TechnicalVolumeAnalyst")
+@patch("vibe_trading.eval.runner.FeaturePipeline")
+def test_run_case_defaults_to_snapshot_path(mock_pipeline_cls, mock_analyst_cls, mock_trader_cls):
+    """Default (no analyst_path) keeps the snapshot path: no db/fetcher, analyze(snapshot=...)."""
+    case = _load_valid_case()
+    mock_pipeline_cls.return_value.run.return_value = {"symbol": case.symbol, "close": 100.0}
+    mock_analyst_cls.return_value.analyze.return_value = AnalystOutput(
+        market_bias="neutral", volume_confirmation="weak", thesis="",
+        nearest_support=0.0, nearest_resistance=0.0, confluence_score=0.0,
+    )
+    mock_trader_cls.return_value.decide.return_value = {
+        "action": "flat", "stop_loss_strategy": "1.5_atr", "take_profit_strategy": "risk_reward_multiplier",
+        "risk_reward_ratio": 1.5, "hold_period_bias": "medium", "reasoning_summary": "",
+    }
+
+    run_case(case, MagicMock())  # default
+
+    init_kwargs = mock_analyst_cls.call_args.kwargs
+    assert init_kwargs.get("db") is None and init_kwargs.get("fetcher") is None
+    analyze_kwargs = mock_analyst_cls.return_value.analyze.call_args.kwargs
+    assert analyze_kwargs.get("snapshot") is not None
