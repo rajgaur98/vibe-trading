@@ -1,6 +1,7 @@
 """Unit tests for the User Data Stream listener. No real websocket / asyncio / network:
 the ccxt.pro client is injected via build_client, and _handle_orders/_is_exit_fill are
 sync and tested directly."""
+import time
 from unittest.mock import MagicMock
 
 from vibe_trading.runtime.ws_listener import _is_exit_fill, UserDataStreamListener
@@ -65,3 +66,25 @@ def test_reconcile_and_record_swallows_broker_error():
     listener = _listener(broker, recorded.append)
     listener._reconcile_and_record()  # must not raise
     assert recorded == []
+
+
+def test_start_is_idempotent_and_stop_clears_running(monkeypatch):
+    broker = MagicMock()
+    listener = _listener(broker, lambda c: None)
+
+    async def _noop():
+        return  # don't open a real websocket
+
+    monkeypatch.setattr(listener, "_run", _noop)
+
+    listener.start()
+    assert listener._running is True
+    first_thread = listener._thread
+    assert first_thread is not None
+
+    listener.start()  # idempotent: must NOT spawn a second thread
+    assert listener._thread is first_thread
+
+    listener.stop()
+    assert listener._running is False
+    time.sleep(0.05)  # let the daemon thread wind down
