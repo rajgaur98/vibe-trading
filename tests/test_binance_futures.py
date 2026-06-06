@@ -276,3 +276,43 @@ def test_update_positions_empty_ledger_no_calls():
     broker = BinanceFuturesBroker(db=None, exchange=ex)  # db None → empty ledger
     assert broker.update_positions({}) == []
     ex.fetch_positions.assert_not_called()
+
+
+def test_delete_position_claim_semantics():
+    # db=None → True (nothing to contend over)
+    broker = BinanceFuturesBroker(db=None, exchange=_mock_exchange())
+    assert broker._delete_position("BTC/USDT") is True
+
+    # db present → returns rowcount > 0
+    fake_cur = MagicMock()
+    fake_cur.rowcount = 1
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value = fake_cur
+    fake_db = MagicMock()
+    fake_db.conn = fake_conn
+    broker2 = BinanceFuturesBroker(db=fake_db, exchange=_mock_exchange())
+    assert broker2._delete_position("BTC/USDT") is True
+    fake_cur.rowcount = 0
+    assert broker2._delete_position("BTC/USDT") is False
+
+
+def test_update_positions_idempotent_under_concurrent_claim():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = []  # symbol flat on exchange
+    ex.fetch_my_trades.return_value = [
+        {"side": "sell", "price": 110.0, "amount": 10.0, "fee": {"cost": 0.0}},
+    ]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    row = {
+        "symbol": "BTC/USDT", "side": "long", "entry_time": _dt(2026, 6, 1),
+        "entry_price": 100.0, "size_usd": 1000.0, "stop_price": 95.0, "take_profit_price": 110.0,
+    }
+    broker._load_ledger = lambda: [row]
+    # First reconcile claims the row (True); a racing second one loses it (False).
+    claims = iter([True, False])
+    broker._delete_position = lambda symbol: next(claims)
+
+    first = broker.update_positions({})
+    second = broker.update_positions({})
+    assert len(first) == 1 and first[0]["symbol"] == "BTC/USDT"
+    assert second == []  # not recorded twice

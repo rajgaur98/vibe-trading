@@ -213,15 +213,20 @@ class BinanceFuturesBroker(BaseBroker):
         finally:
             self.db.close()
 
-    def _delete_position(self, symbol: str):
-        """Remove a position from the Postgres ledger (no-op when db is None)."""
+    def _delete_position(self, symbol: str) -> bool:
+        """Remove a position from the Postgres ledger. Returns True if THIS call claimed
+        (actually deleted) the row — the atomic gate that makes concurrent reconciles
+        record a close exactly once. When db is None (backtest/test), returns True
+        (nothing to contend over)."""
         if not self.db:
-            return
+            return True
         try:
             self.db.connect()
-            self.db.conn.execute("DELETE FROM open_positions WHERE symbol = ?", (symbol,))
+            cur = self.db.conn.execute("DELETE FROM open_positions WHERE symbol = ?", (symbol,))
+            return bool(getattr(cur, "rowcount", 0) and cur.rowcount > 0)
         except Exception as e:
             logger.error(f"BinanceFuturesBroker: failed to delete ledger row {symbol}: {e}")
+            return False
         finally:
             self.db.close()
 
@@ -267,8 +272,9 @@ class BinanceFuturesBroker(BaseBroker):
             if row["symbol"] in open_syms:
                 continue
             try:
-                closed.append(self._build_closed_trade(row))
-                self._delete_position(row["symbol"])
+                trade = self._build_closed_trade(row)
+                if self._delete_position(row["symbol"]):  # atomic claim → record once
+                    closed.append(trade)
             except Exception as e:
                 logger.error(f"BinanceFuturesBroker: failed to build closed trade for "
                              f"{row['symbol']}: {e}")
