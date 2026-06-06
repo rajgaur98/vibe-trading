@@ -1,5 +1,5 @@
 import { Card, CardContent } from "@/components/ui/card";
-import { TrendingUp, TrendingDown, DollarSign, Percent, Award, ShieldAlert } from "lucide-react";
+import { TrendingUp, TrendingDown, DollarSign, Percent, Award, ShieldAlert, Cpu } from "lucide-react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -14,7 +14,21 @@ interface MetricsData {
   drawdown: number;
 }
 
-export default function MetricsGrid({ metrics }: { metrics: MetricsData | null }) {
+interface CostData {
+  today_usd: number;
+  calls: number;
+  tokens: number;
+  avg_cost_per_call: number;
+  projected_monthly_usd: number;
+}
+
+export default function MetricsGrid({
+  metrics,
+  costs,
+}: {
+  metrics: MetricsData | null;
+  costs?: CostData | null;
+}) {
   const data = [
     {
       title: "Portfolio Balance",
@@ -48,6 +62,16 @@ export default function MetricsGrid({ metrics }: { metrics: MetricsData | null }
       desc: "Relative to peak equity",
       iconColor: "text-amber-400",
       iconBg: "bg-amber-500/10",
+    },
+    {
+      title: "LLM Spend (today)",
+      value: costs ? `$${(costs.today_usd ?? 0).toFixed(4)}` : <Skeleton className="h-8 w-20" />,
+      icon: Cpu,
+      desc: costs
+        ? `~$${(costs.projected_monthly_usd ?? 0).toFixed(2)}/mo · ${costs.calls ?? 0} calls`
+        : <Skeleton className="h-3 w-20 mt-1" />,
+      iconColor: "text-violet-400",
+      iconBg: "bg-violet-500/10",
     },
   ];
 

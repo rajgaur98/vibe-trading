@@ -24,6 +24,7 @@ interface Decision {
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState<any>(null);
+  const [costs, setCosts] = useState<any>(null);
   const [positions, setPositions] = useState<any[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -62,15 +63,17 @@ export default function Dashboard() {
   async function fetchDashboardData() {
     setRefreshing(true);
     try {
-      const [metricsRes, posRes, decRes] = await Promise.all([
+      const [metricsRes, posRes, decRes, costsRes] = await Promise.all([
         fetch("/api/metrics"),
         fetch("/api/positions"),
         fetch("/api/decisions?limit=5"),
+        fetch("/api/costs"),
       ]);
 
       if (metricsRes.ok) setMetrics(await metricsRes.json());
       if (posRes.ok) setPositions(await posRes.json());
       if (decRes.ok) setDecisions(await decRes.json());
+      if (costsRes.ok) setCosts(await costsRes.json());
     } catch (err) {
       console.error("Error fetching dashboard data:", err);
     } finally {
@@ -214,7 +217,7 @@ export default function Dashboard() {
       )}
 
       {/* Metrics Row */}
-      <MetricsGrid metrics={metrics} />
+      <MetricsGrid metrics={metrics} costs={costs} />
 
       {/* Charts & Positions Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
