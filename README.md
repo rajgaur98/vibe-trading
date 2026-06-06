@@ -228,3 +228,19 @@ fresh checkout, run with `--update-baseline` once. If your provider has a tight
 **token** cap (e.g. Groq's TPD), prefer Gemma; if it has a tight **request** cap,
 raise `--throttle-seconds` so the per-minute bucket has time to refill.
 
+## Cost Tracking
+
+Every LLM call's tokens, dollar cost, and latency are logged to the `llm_cost_log`
+Postgres table (capture happens in `LLMClient`, the single call chokepoint — so eval and
+prod share the same accounting code). Cost is computed from LiteLLM's model pricing, with
+a shadow-price fallback (`PRICE_OVERRIDES` in `agents/cost.py`) for models LiteLLM doesn't
+price — e.g. the free-tier Gemma models — so projected $/month stays meaningful.
+
+- **Dashboard:** a cost tile shows today's spend, projected $/month, and call count.
+- **API:** `GET /api/costs` returns the daily summary + per-model breakdown.
+- **Alarm:** the scheduler sends a Discord alert once per UTC day when spend exceeds
+  `LLM_DAILY_COST_ALARM_USD` (default $5).
+
+Cost tracking is observational only — a logging failure never interrupts a trade. The
+hard daily-$ kill switch (which *blocks* trades) is a separate guardrail.
+
