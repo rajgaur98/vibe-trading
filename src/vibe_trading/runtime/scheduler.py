@@ -54,14 +54,15 @@ class TradingScheduler:
 
     def start(self):
         """Starts the main scheduling loop."""
-        # 1. Run immediate bootstrap/sync on startup
+        # 1. Start real-time fill bookkeeping FIRST (LIVE_TESTNET only) so the User Data
+        #    Stream is live immediately — not gated behind the slow initial sync below.
+        self.ws_listener = self._maybe_start_ws_listener()
+
+        # 2. Run immediate bootstrap/sync on startup
         logger.info("Initializing startup data synchronization...")
         self.sync_and_evaluate()
 
-        # 1b. Real-time fill bookkeeping via the User Data Stream websocket (LIVE_TESTNET only)
-        self.ws_listener = self._maybe_start_ws_listener()
-
-        # 2. Setup recurring 4-hour scheduler
+        # 3. Setup recurring 4-hour scheduler
         scheduler = BlockingScheduler()
         # Schedule to run at the start of every 4h block (00:00, 04:00, 08:00, etc.)
         scheduler.add_job(self.sync_and_evaluate, 'cron', hour='*/4', minute=1)
