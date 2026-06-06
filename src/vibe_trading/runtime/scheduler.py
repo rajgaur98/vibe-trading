@@ -17,6 +17,7 @@ from vibe_trading.agents.cost import PostgresCostLogger, daily_summary, should_a
 from vibe_trading.brokers.risk import RiskManager
 from vibe_trading.brokers.paper import PaperBroker
 from vibe_trading.brokers.coinbase import CoinbaseBroker
+from vibe_trading.brokers.binance_futures import BinanceFuturesBroker
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,8 @@ class TradingScheduler:
         mode = os.getenv("TRADING_MODE", "PAPER").upper()
         if mode == "LIVE_SANDBOX":
             self.broker = CoinbaseBroker()
+        elif mode == "LIVE_TESTNET":
+            self.broker = BinanceFuturesBroker(db=self.pg_db)
         else:
             self.broker = PaperBroker(db=self.pg_db)
         
@@ -170,7 +173,11 @@ class TradingScheduler:
                         continue
                     
                     last_ts, current_price = last_candle_ts_res
-                    
+
+                    # Execution-critical price: futures mark in LIVE_TESTNET, else spot close.
+                    # TA below still uses spot candles; only entry/proximity price is aligned.
+                    exec_price = self._resolve_exec_price(sym, current_price)
+
                     # Step 1: Analyst agent evaluation via tool-use loop
                     # (the analyst opens its own short-lived DB connections via the ToolExecutor)
                     try:
@@ -186,7 +193,7 @@ class TradingScheduler:
                     
                     # Step 2: Head Trader decision (database is fully closed during this slow API call!)
                     open_positions = self.broker.get_open_positions()
-                    proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions, current_price=current_price)
+                    proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions, current_price=exec_price)
                     
                     # Step 3: Log decision to database
                     self.pg_db.connect()
@@ -208,7 +215,7 @@ class TradingScheduler:
                     df_4h = self.pipeline._get_candles(sym, "4h", last_ts, limit=30)
                     risk_res = self.risk_manager.evaluate_proposal(
                         proposal=proposal,
-                        current_price=current_price,
+                        current_price=exec_price,
                         df_4h=df_4h,
                         account_balance=self.broker.get_balance(),
                         peak_balance=self.broker.peak_balance,
@@ -246,6 +253,17 @@ class TradingScheduler:
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")
+
+    def _resolve_exec_price(self, sym: str, fallback: float) -> float:
+        """Execution-critical price: the broker's futures mark when available
+        (LIVE_TESTNET), else the DuckDB spot 4h close fallback (PAPER/eval).
+        TA still runs on spot candles — only the entry/proximity price is aligned."""
+        try:
+            mark = self.broker.get_mark_price(sym)
+        except Exception as e:
+            logger.warning(f"get_mark_price failed for {sym}: {e}; using spot fallback.")
+            mark = None
+        return mark if mark is not None else fallback
 
     def _check_cost_alarm(self):
         """Discord-alarm once per UTC day when LLM spend exceeds LLM_DAILY_COST_ALARM_USD."""
