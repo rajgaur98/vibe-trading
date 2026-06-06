@@ -169,6 +169,9 @@ def translate_query(sql: str) -> str:
     if "INSERT OR IGNORE INTO decision_log" in sql:
         sql = sql.replace("INSERT OR IGNORE INTO decision_log", "INSERT INTO decision_log")
         sql += " ON CONFLICT (decision_id) DO NOTHING"
+    elif "INSERT OR IGNORE INTO llm_cost_log" in sql:
+        sql = sql.replace("INSERT OR IGNORE INTO llm_cost_log", "INSERT INTO llm_cost_log")
+        sql += " ON CONFLICT (call_id) DO NOTHING"
     elif "INSERT OR REPLACE INTO open_positions" in sql:
         sql = sql.replace("INSERT OR REPLACE INTO open_positions", "INSERT INTO open_positions")
         sql += """ ON CONFLICT (symbol) DO UPDATE SET 
@@ -328,6 +331,20 @@ class PostgresDatabase:
                     risk_reward_ratio DOUBLE PRECISION,
                     reasoning_summary TEXT,
                     agent_transcripts TEXT
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS llm_cost_log (
+                    call_id VARCHAR PRIMARY KEY,
+                    timestamp TIMESTAMP,
+                    provider VARCHAR,
+                    model VARCHAR,
+                    call_type VARCHAR,
+                    prompt_tokens INTEGER,
+                    completion_tokens INTEGER,
+                    total_tokens INTEGER,
+                    cost_usd DOUBLE PRECISION,
+                    latency_ms DOUBLE PRECISION
                 )
             """)
             self.conn.commit()

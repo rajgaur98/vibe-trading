@@ -66,3 +66,15 @@ def test_postgres_database():
     db.conn.commit()
     db.close()
 
+
+
+from vibe_trading.data.db import translate_query
+
+
+def test_translate_query_handles_llm_cost_log_insert():
+    sql = "INSERT OR IGNORE INTO llm_cost_log (call_id, cost_usd) VALUES (?, ?)"
+    out = translate_query(sql)
+    assert "INSERT INTO llm_cost_log" in out
+    assert "ON CONFLICT (call_id) DO NOTHING" in out
+    assert "?" not in out  # placeholders translated to %s
+    assert "%s" in out
