@@ -173,7 +173,10 @@ identical; it now uses a fresh pooled connection instead of `self.pg_db`, which 
 ```python
 if os.getenv("TRADING_MODE", "PAPER").upper() == "LIVE_TESTNET":
     from vibe_trading.runtime.ws_listener import UserDataStreamListener
-    ws_broker = BinanceFuturesBroker(db=self.pg_db)   # separate ccxt client (own thread)
+    # Its OWN PostgresDatabase() instance (not self.pg_db): PostgresDatabase holds a single
+    # mutable .conn per instance, so the ws thread must not share the scheduler's. Both draw
+    # from the same shared pool. The ccxt client is likewise its own (no cross-thread sharing).
+    ws_broker = BinanceFuturesBroker(db=PostgresDatabase())
     self.ws_listener = UserDataStreamListener(ws_broker, self._record_closed_trades)
     self.ws_listener.start()
 ```
