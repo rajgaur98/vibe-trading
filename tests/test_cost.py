@@ -54,3 +54,56 @@ def test_cost_event_build_unique_call_ids():
     b = CostEvent.build(provider="g", model="m", call_type="single",
                         prompt_tokens=1, completion_tokens=1, latency_ms=1.0)
     assert a.call_id != b.call_id
+
+
+from unittest.mock import MagicMock
+from vibe_trading.agents.cost import daily_summary, PostgresCostLogger
+
+
+class _FakeCursor:
+    """Stand-in for the project's PostgresConnectionWrapper: execute() returns self,
+    then fetchone()/fetchall() yield canned results queued by the test."""
+    def __init__(self, scalar_row, model_rows):
+        self._scalar_row = scalar_row
+        self._model_rows = model_rows
+    def execute(self, sql, params=None):
+        return self
+    def fetchone(self):
+        return self._scalar_row
+    def fetchall(self):
+        return self._model_rows
+
+
+def test_daily_summary_aggregates_and_projects():
+    conn = _FakeCursor(
+        scalar_row=(0.0123, 47, 91234),
+        model_rows=[("gemini/gemma-4-31b-it", 47, 0.0123)],
+    )
+    s = daily_summary(conn)
+    assert abs(s["today_usd"] - 0.0123) < 1e-9
+    assert s["calls"] == 47
+    assert s["tokens"] == 91234
+    assert abs(s["avg_cost_per_call"] - 0.0123 / 47) < 1e-9
+    assert abs(s["projected_monthly_usd"] - 0.0123 * 30) < 1e-9
+    assert s["by_model"][0]["model"] == "gemini/gemma-4-31b-it"
+
+
+def test_daily_summary_empty_returns_zeros():
+    conn = _FakeCursor(scalar_row=(None, 0, None), model_rows=[])
+    s = daily_summary(conn)
+    assert s["today_usd"] == 0.0
+    assert s["calls"] == 0
+    assert s["tokens"] == 0
+    assert s["avg_cost_per_call"] == 0.0
+    assert s["projected_monthly_usd"] == 0.0
+    assert s["by_model"] == []
+
+
+def test_postgres_cost_logger_record_is_best_effort():
+    """A failing DB must NOT raise out of record() — cost logging can't break a trade."""
+    boom_db = MagicMock()
+    boom_db.connect.side_effect = RuntimeError("db down")
+    logger_ = PostgresCostLogger(db=boom_db)
+    ev = CostEvent.build(provider="g", model="m", call_type="single",
+                        prompt_tokens=1, completion_tokens=1, latency_ms=1.0)
+    logger_.record(ev)  # must not raise
