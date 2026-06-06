@@ -107,3 +107,18 @@ def test_postgres_cost_logger_record_is_best_effort():
     ev = CostEvent.build(provider="g", model="m", call_type="single",
                         prompt_tokens=1, completion_tokens=1, latency_ms=1.0)
     logger_.record(ev)  # must not raise
+
+
+from vibe_trading.agents.cost import should_alarm
+
+
+def test_should_alarm_fires_over_threshold():
+    assert should_alarm(today_usd=6.0, threshold=5.0, already_alarmed_today=False) is True
+
+
+def test_should_alarm_silent_under_threshold():
+    assert should_alarm(today_usd=2.0, threshold=5.0, already_alarmed_today=False) is False
+
+
+def test_should_alarm_dedups_within_day():
+    assert should_alarm(today_usd=6.0, threshold=5.0, already_alarmed_today=True) is False

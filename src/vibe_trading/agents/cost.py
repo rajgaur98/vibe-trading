@@ -129,3 +129,8 @@ def daily_summary(conn) -> dict:
         "projected_monthly_usd": today_usd * 30,
         "by_model": [{"model": m, "calls": int(c), "cost_usd": float(u)} for (m, c, u) in model_rows],
     }
+
+
+def should_alarm(today_usd: float, threshold: float, already_alarmed_today: bool) -> bool:
+    """True when today's spend exceeds the threshold and we haven't already alarmed today."""
+    return today_usd > threshold and not already_alarmed_today

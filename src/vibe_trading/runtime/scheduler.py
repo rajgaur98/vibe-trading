@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, date
 import urllib.request
 import json
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -12,6 +12,8 @@ from vibe_trading.data.fetcher import DataFetcher
 from vibe_trading.features.pipeline import FeaturePipeline
 from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
 from vibe_trading.agents.trader import HeadTrader
+from vibe_trading.agents.client import LLMClient
+from vibe_trading.agents.cost import PostgresCostLogger, daily_summary, should_alarm
 from vibe_trading.brokers.risk import RiskManager
 from vibe_trading.brokers.paper import PaperBroker
 from vibe_trading.brokers.coinbase import CoinbaseBroker
@@ -23,7 +25,11 @@ class TradingScheduler:
         self.symbols = symbols or []
         self.db = Database()
         self.pg_db = PostgresDatabase()
-        
+
+        # Route every LLM call's cost into Postgres (own pooled connection, not self.pg_db).
+        LLMClient.set_cost_sink(PostgresCostLogger())
+        self._cost_alarmed_on: date | None = None
+
         # Load correct broker dependency based on TRADING_MODE
         mode = os.getenv("TRADING_MODE", "PAPER").upper()
         if mode == "LIVE_SANDBOX":
@@ -91,6 +97,9 @@ class TradingScheduler:
             logger.info(f"--- Execution Window: {now.strftime('%Y-%m-%d %H:%M:%S UTC')} ---")
             
             try:
+                # 0. Alarm if today's LLM spend has spiked past the configured cap.
+                self._check_cost_alarm()
+
                 # 1. Fetch latest candles and write to DB (internally connects and closes DB)
                 self.fetcher.incremental_update(self.db, all_active_symbols, ["1d", "4h"], limit=15)
                 
@@ -230,6 +239,31 @@ class TradingScheduler:
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")
+
+    def _check_cost_alarm(self):
+        """Discord-alarm once per UTC day when LLM spend exceeds LLM_DAILY_COST_ALARM_USD."""
+        threshold = float(os.getenv("LLM_DAILY_COST_ALARM_USD", "5.0"))
+        try:
+            self.pg_db.connect()
+            summary = daily_summary(self.pg_db.conn)
+        except Exception as e:
+            logger.warning(f"cost alarm check skipped (non-fatal): {e}")
+            return
+        finally:
+            try:
+                self.pg_db.close()
+            except Exception:
+                pass
+
+        today = datetime.utcnow().date()
+        already = self._cost_alarmed_on == today
+        if should_alarm(summary["today_usd"], threshold, already):
+            self._cost_alarmed_on = today
+            self._send_discord_alert(
+                f"💸 **LLM COST ALARM:** today's spend ${summary['today_usd']:.2f} "
+                f"exceeded ${threshold:.2f} ({summary['calls']} calls, "
+                f"~${summary['projected_monthly_usd']:.2f}/mo projected)."
+            )
 
     def _send_discord_alert(self, message: str):
         """Sends an alert to Discord webhook if configured."""
