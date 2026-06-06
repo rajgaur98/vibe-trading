@@ -1,5 +1,7 @@
 # Vibe Trading 🌊📈
 
+[Architecture overview](ARCHITECTURE.md)
+
 A systematic crypto swing-trading bot powered by **Google Gemini multi-agent reasoning** and **deterministic Python risk management**. Designed to trade major cryptocurrencies (BTC/USD, ETH/USD) on a 4-hour timeframe using Google AI Studio's Free Tier ($0 operational cost).
 
 ---
