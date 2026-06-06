@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from vibe_trading.data.db import Database, PostgresDatabase
+from vibe_trading.agents.cost import daily_summary
 from vibe_trading.runtime.scheduler import TradingScheduler
 
 app = FastAPI(title="Vibe Trading API", description="REST endpoints for Vibe Trading Dashboard")
@@ -146,6 +147,19 @@ def get_metrics():
         "drawdown": round(drawdown, 2),
         "equity_curve": equity_curve
     }
+
+@app.get("/api/costs")
+def get_costs():
+    """Today's LLM spend: $/call, $/day, projected $/month, tokens, per-model breakdown."""
+    default = {
+        "today_usd": 0.0, "calls": 0, "tokens": 0,
+        "avg_cost_per_call": 0.0, "projected_monthly_usd": 0.0, "by_model": [],
+    }
+    try:
+        with get_pg_conn() as conn:
+            return daily_summary(conn)
+    except Exception:
+        return default
 
 @app.get("/api/positions")
 def get_positions():
