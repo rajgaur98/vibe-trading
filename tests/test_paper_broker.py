@@ -45,6 +45,13 @@ def test_submit_order_without_entry_price_defaults_to_lazy_fill():
     assert broker.positions["ETH/USDT"]["entry_price"] == 2000.0
 
 
+def test_paper_broker_get_mark_price_is_none():
+    """PaperBroker inherits the BaseBroker default get_mark_price() -> None, so the
+    scheduler falls back to the DuckDB spot close (PAPER/eval behavior unchanged)."""
+    broker = PaperBroker(initial_balance=10000.0, db=None)
+    assert broker.get_mark_price("BTC/USDT") is None
+
+
 def test_submit_order_filled_position_pnl_math_uses_immediate_entry():
     """When entry_price is set at submit time, the next update tick should be able to
     resolve SL/TP without doing the lazy-fill detour."""

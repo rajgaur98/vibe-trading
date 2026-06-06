@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 class BaseBroker(ABC):
     @abstractmethod
@@ -45,3 +45,11 @@ class BaseBroker(ABC):
         Mainly utilized by paper trading and backtesters.
         """
         pass
+
+    def get_mark_price(self, symbol: str) -> Optional[float]:
+        """Execution-critical price for `symbol`, or None if this broker has no
+        live price source. The scheduler uses this in LIVE_TESTNET to align entry/
+        proximity decisions to the traded instrument's mark; brokers that return
+        None cause the scheduler to fall back to the DuckDB spot close.
+        """
+        return None
