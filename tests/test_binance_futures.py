@@ -94,3 +94,42 @@ def test_submit_order_short_flips_sides():
     assert calls[1].args[2] == "buy"    # exit side BUY
     assert calls[2].args[1] == "STOP_MARKET"
     assert calls[2].args[2] == "buy"
+
+
+def test_submit_order_rejects_below_min_notional():
+    ex = _mock_exchange()
+    ex.market.return_value = {"limits": {"cost": {"min": 5000.0}, "amount": {"min": 0.0001}}}
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=100.0,  # notional 100 < min 5000
+        stop_price=95.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    assert res["status"] == "rejected"
+    assert "minimum" in res["reason"]
+    ex.create_order.assert_not_called()  # no entry order placed
+
+
+def test_submit_order_dry_run_places_nothing(monkeypatch):
+    monkeypatch.setenv("BINANCE_TESTNET_DRY_RUN", "true")
+    ex = _mock_exchange()
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=1000.0,
+        stop_price=95.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    assert res["status"] == "dry_run"
+    ex.create_order.assert_not_called()
+
+
+def test_submit_order_rounds_via_precision_helpers():
+    ex = _mock_exchange()
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=1000.0,
+        stop_price=95.123456, take_profit_price=110.987654, entry_price=100.0,
+    )
+    # stopPrice on the bracket orders must come from price_to_precision (2dp here)
+    calls = ex.create_order.call_args_list
+    assert calls[1].kwargs["params"]["stopPrice"] == "110.99"
+    assert calls[2].kwargs["params"]["stopPrice"] == "95.12"
+    ex.amount_to_precision.assert_called()  # qty rounded too
