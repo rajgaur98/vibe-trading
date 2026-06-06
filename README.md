@@ -239,8 +239,13 @@ price — e.g. the free-tier Gemma models — so projected $/month stays meaning
 - **Dashboard:** a cost tile shows today's spend, projected $/month, and call count.
 - **API:** `GET /api/costs` returns the daily summary + per-model breakdown.
 - **Alarm:** the scheduler sends a Discord alert once per UTC day when spend exceeds
-  `LLM_DAILY_COST_ALARM_USD` (default $5).
+  `LLM_DAILY_COST_ALARM_USD` (default $5) — a warning.
+- **Kill switch (hard cap):** once today's spend reaches `LLM_DAILY_COST_CAP_USD`
+  (default $10; set `<= 0` to disable), the scheduler **blocks new-entry evaluation**
+  (the expensive analyst/trader LLM calls) for the rest of the UTC day, stopping further
+  spend. Existing positions keep being managed (deterministic SL/TP, no LLM). The gate
+  is the named, testable `should_block_trading()` control, enforced before the LLM calls
+  so it actually saves cost. Fail-open: a spend-read error never halts trading.
 
-Cost tracking is observational only — a logging failure never interrupts a trade. The
-hard daily-$ kill switch (which *blocks* trades) is a separate guardrail.
+Cost tracking itself is observational — a logging failure never interrupts a trade.
 

@@ -13,7 +13,7 @@ from vibe_trading.features.pipeline import FeaturePipeline
 from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
 from vibe_trading.agents.trader import HeadTrader
 from vibe_trading.agents.client import LLMClient
-from vibe_trading.agents.cost import PostgresCostLogger, daily_summary, should_alarm
+from vibe_trading.agents.cost import PostgresCostLogger, daily_summary, should_alarm, should_block_trading
 from vibe_trading.brokers.risk import RiskManager
 from vibe_trading.brokers.paper import PaperBroker
 from vibe_trading.brokers.coinbase import CoinbaseBroker
@@ -29,6 +29,7 @@ class TradingScheduler:
         # Route every LLM call's cost into Postgres (own pooled connection, not self.pg_db).
         LLMClient.set_cost_sink(PostgresCostLogger())
         self._cost_alarmed_on: date | None = None
+        self._cost_blocked_on: date | None = None
 
         # Load correct broker dependency based on TRADING_MODE
         mode = os.getenv("TRADING_MODE", "PAPER").upper()
@@ -138,8 +139,14 @@ class TradingScheduler:
                     finally:
                         self.pg_db.close()
                 
-                # 3. Check for new entry signals
+                # 3. Check for new entry signals — unless the hard LLM-spend cap is hit.
+                # Existing positions were already updated above and keep being managed;
+                # only NEW-entry evaluation (the expensive analyst/trader LLM calls) is blocked.
+                trading_blocked = self._trading_blocked_by_cost()
                 for sym in trending_symbols:
+                    if trading_blocked:
+                        break
+
                     # Limit open positions to max concurrent portfolio exposure (5 positions)
                     if len(self.broker.get_open_positions()) >= 5:
                         logger.info("Max concurrent portfolio exposure reached. Skipping new evaluations.")
@@ -264,6 +271,46 @@ class TradingScheduler:
                 f"exceeded ${threshold:.2f} ({summary['calls']} calls, "
                 f"~${summary['projected_monthly_usd']:.2f}/mo projected)."
             )
+
+    def _trading_blocked_by_cost(self) -> bool:
+        """Hard daily LLM-spend kill switch. True when today's spend has hit
+        LLM_DAILY_COST_CAP_USD (default $10; <= 0 disables), meaning new-entry
+        evaluation should be skipped for the rest of the UTC day. Notifies Discord
+        once per day when the cap first engages.
+
+        Fail-open: on any error reading spend, returns False — a logging/DB hiccup
+        must never halt trading (that would be a worse failure than slight overspend).
+        """
+        cap = float(os.getenv("LLM_DAILY_COST_CAP_USD", "10.0"))
+        if cap <= 0:
+            return False
+        try:
+            self.pg_db.connect()
+            summary = daily_summary(self.pg_db.conn)
+        except Exception as e:
+            logger.warning(f"cost cap check skipped (non-fatal, fail-open): {e}")
+            return False
+        finally:
+            try:
+                self.pg_db.close()
+            except Exception:
+                pass
+
+        if not should_block_trading(summary["today_usd"], cap):
+            return False
+
+        today = datetime.utcnow().date()
+        if self._cost_blocked_on != today:
+            self._cost_blocked_on = today
+            self._send_discord_alert(
+                f"🛑 **LLM COST CAP REACHED:** today's spend ${summary['today_usd']:.2f} "
+                f"hit the ${cap:.2f} cap. Blocking NEW trade evaluation until tomorrow "
+                f"(open positions are still managed)."
+            )
+        logger.warning(
+            f"LLM daily cost cap (${cap:.2f}) reached — skipping new-entry evaluation this tick."
+        )
+        return True
 
     def _send_discord_alert(self, message: str):
         """Sends an alert to Discord webhook if configured."""

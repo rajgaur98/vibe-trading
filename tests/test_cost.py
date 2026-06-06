@@ -122,3 +122,23 @@ def test_should_alarm_silent_under_threshold():
 
 def test_should_alarm_dedups_within_day():
     assert should_alarm(today_usd=6.0, threshold=5.0, already_alarmed_today=True) is False
+
+
+from vibe_trading.agents.cost import should_block_trading
+
+
+def test_should_block_trading_over_cap():
+    assert should_block_trading(today_usd=10.5, cap_usd=10.0) is True
+
+
+def test_should_block_trading_at_cap_blocks():
+    assert should_block_trading(today_usd=10.0, cap_usd=10.0) is True
+
+
+def test_should_block_trading_under_cap():
+    assert should_block_trading(today_usd=4.0, cap_usd=10.0) is False
+
+
+def test_should_block_trading_disabled_when_cap_zero():
+    # cap <= 0 disables the kill switch entirely (never blocks)
+    assert should_block_trading(today_usd=999.0, cap_usd=0.0) is False
