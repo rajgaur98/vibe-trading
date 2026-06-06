@@ -57,7 +57,10 @@ class TradingScheduler:
         # 1. Run immediate bootstrap/sync on startup
         logger.info("Initializing startup data synchronization...")
         self.sync_and_evaluate()
-        
+
+        # 1b. Real-time fill bookkeeping via the User Data Stream websocket (LIVE_TESTNET only)
+        self.ws_listener = self._maybe_start_ws_listener()
+
         # 2. Setup recurring 4-hour scheduler
         scheduler = BlockingScheduler()
         # Schedule to run at the start of every 4h block (00:00, 04:00, 08:00, etc.)
@@ -236,6 +239,23 @@ class TradingScheduler:
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")
+
+    def _maybe_start_ws_listener(self):
+        """Start the User Data Stream websocket listener for real-time fill bookkeeping
+        (LIVE_TESTNET only). Fail-open: any construction error is logged and returns None
+        so the scheduler still runs (the 4h reconcile remains the safety net)."""
+        if os.getenv("TRADING_MODE", "PAPER").upper() != "LIVE_TESTNET":
+            return None
+        try:
+            from vibe_trading.runtime.ws_listener import UserDataStreamListener
+            ws_broker = BinanceFuturesBroker(db=PostgresDatabase())  # own conn (thread-safe)
+            listener = UserDataStreamListener(ws_broker, self._record_closed_trades)
+            listener.start()
+            return listener
+        except Exception as e:
+            logger.error(f"Failed to start User Data Stream listener "
+                         f"(continuing without it): {e}")
+            return None
 
     def _record_closed_trades(self, closed_trades: list):
         """Persist closed trades to `trades` and send Discord alerts. Thread-safe: opens

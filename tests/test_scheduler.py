@@ -65,3 +65,45 @@ def test_record_closed_trades_empty_is_noop(monkeypatch):
     sched._record_closed_trades([])
     assert factory.call_count == 0  # no connection opened
     assert alerts == []
+
+
+def test_maybe_start_ws_listener_none_when_not_testnet(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "PAPER")
+    sched = _scheduler_without_init()
+    assert sched._maybe_start_ws_listener() is None
+
+
+def test_maybe_start_ws_listener_starts_in_testnet(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "LIVE_TESTNET")
+    sched = _scheduler_without_init()
+    sched._record_closed_trades = lambda closed: None
+    monkeypatch.setattr("vibe_trading.runtime.scheduler.PostgresDatabase", lambda *a, **k: MagicMock())
+    monkeypatch.setattr("vibe_trading.runtime.scheduler.BinanceFuturesBroker", lambda *a, **k: MagicMock())
+
+    started = {}
+
+    class FakeListener:
+        def __init__(self, broker, record_fn):
+            started["init"] = True
+
+        def start(self):
+            started["start"] = True
+
+    monkeypatch.setattr("vibe_trading.runtime.ws_listener.UserDataStreamListener", FakeListener)
+
+    listener = sched._maybe_start_ws_listener()
+    assert isinstance(listener, FakeListener)
+    assert started.get("init") and started.get("start")
+
+
+def test_maybe_start_ws_listener_failopen_returns_none(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "LIVE_TESTNET")
+    sched = _scheduler_without_init()
+    sched._record_closed_trades = lambda closed: None
+
+    def _boom(*a, **k):
+        raise RuntimeError("no creds")
+
+    monkeypatch.setattr("vibe_trading.runtime.scheduler.PostgresDatabase", _boom)
+    # A listener-construction failure must NOT propagate (scheduler keeps running).
+    assert sched._maybe_start_ws_listener() is None

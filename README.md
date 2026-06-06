@@ -206,9 +206,10 @@ paper model. Futures (not spot) is used because the trader emits **short** as we
 - **Smoke test (manual):** `python scripts/binance_testnet_smoke.py` opens a tiny position
   with a bracket, prints it, and closes it (requires your testnet keys).
 
-> Real-time fill push via the User Data Stream websocket is a separate follow-on; until
-> then the trade-history log + close alert may lag up to one 4h tick (the exit itself and
-> the dashboard are already real-time).
+> **Real-time bookkeeping:** a User Data Stream websocket listener (ccxt.pro `watch_orders`,
+> a daemon thread started with the scheduler) records bracket-closed trades to `trades` +
+> Discord within seconds of the fill, instead of at the next 4h tick. The 4h reconcile
+> remains the safety net, and an atomic ledger claim-delete prevents any double-recording.
 
 ---
 
