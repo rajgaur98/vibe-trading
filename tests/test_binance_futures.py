@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from datetime import datetime as _dt
+
 from vibe_trading.brokers.binance_futures import BinanceFuturesBroker, _to_ccxt_symbol
 
 
@@ -227,3 +229,50 @@ def test_close_position_no_position_returns_rejected():
     broker = BinanceFuturesBroker(db=None, exchange=ex)
     res = broker.close_position("BTC/USDT")
     assert res["status"] == "rejected"
+
+
+def test_update_positions_reconciles_closed_trade():
+    ex = _mock_exchange()
+    # Ledger says BTC is open; exchange shows it flat → it was closed by a bracket.
+    ex.fetch_positions.return_value = []  # nothing open on the exchange
+    ex.fetch_my_trades.return_value = [
+        {"side": "sell", "price": 110.0, "amount": 10.0, "fee": {"cost": 0.4}},
+    ]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    # Inject a ledger row (db is None, so _load_ledger would be empty otherwise)
+    broker._load_ledger = lambda: [{
+        "symbol": "BTC/USDT", "side": "long", "entry_time": _dt(2026, 6, 1, 0, 0, 0),
+        "entry_price": 100.0, "size_usd": 1000.0, "stop_price": 95.0, "take_profit_price": 110.0,
+    }]
+
+    closed = broker.update_positions({})
+    assert len(closed) == 1
+    t = closed[0]
+    assert t["symbol"] == "BTC/USDT"
+    assert t["action"] == "long"
+    assert t["entry_price"] == 100.0
+    assert t["close_price"] == 110.0
+    # qty = 1000/100 = 10 ; pnl = (110-100)*10 - 0.4 = 99.6
+    assert round(t["realized_pnl"], 2) == 99.6
+    assert t["result"] == "win"
+    assert {"trade_id", "close_time", "size_usd"} <= set(t.keys())
+
+
+def test_update_positions_keeps_still_open_position():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [
+        {"symbol": "BTC/USDT:USDT", "contracts": 0.5},  # still open
+    ]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker._load_ledger = lambda: [{
+        "symbol": "BTC/USDT", "side": "long", "entry_time": _dt(2026, 6, 1),
+        "entry_price": 100.0, "size_usd": 1000.0, "stop_price": 95.0, "take_profit_price": 110.0,
+    }]
+    assert broker.update_positions({}) == []
+
+
+def test_update_positions_empty_ledger_no_calls():
+    ex = _mock_exchange()
+    broker = BinanceFuturesBroker(db=None, exchange=ex)  # db None → empty ledger
+    assert broker.update_positions({}) == []
+    ex.fetch_positions.assert_not_called()

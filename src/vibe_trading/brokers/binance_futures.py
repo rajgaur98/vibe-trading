@@ -245,4 +245,71 @@ class BinanceFuturesBroker(BaseBroker):
             return {"status": "rejected", "reason": str(e)}
 
     def update_positions(self, current_prices: Dict[str, float]) -> List[Dict[str, Any]]:
-        raise NotImplementedError
+        """Reconcile the Postgres ledger against live exchange positions. Any ledger
+        symbol that is no longer open on the exchange was closed by its bracket →
+        emit a closed_trade and drop it from the ledger. `current_prices` is ignored
+        (the exchange is the source of truth). Never raises — returns [] on any error."""
+        ledger = self._load_ledger()
+        if not ledger:
+            return []
+        try:
+            live = self.exchange.fetch_positions()
+            open_syms = {
+                _to_plain_symbol(p.get("symbol", ""))
+                for p in live if float(p.get("contracts") or 0) != 0
+            }
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: reconcile fetch_positions failed: {e}")
+            return []
+
+        closed: List[Dict[str, Any]] = []
+        for row in ledger:
+            if row["symbol"] in open_syms:
+                continue
+            try:
+                closed.append(self._build_closed_trade(row))
+                self._delete_position(row["symbol"])
+            except Exception as e:
+                logger.error(f"BinanceFuturesBroker: failed to build closed trade for "
+                             f"{row['symbol']}: {e}")
+        return closed
+
+    def _build_closed_trade(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        side = row["side"]
+        entry_price = float(row["entry_price"])
+        size_usd = float(row["size_usd"])
+        entry_time = row["entry_time"]
+        qty = size_usd / entry_price if entry_price else 0.0
+
+        close_price = entry_price
+        realized_pnl = 0.0
+        try:
+            since = int(entry_time.timestamp() * 1000) if hasattr(entry_time, "timestamp") else None
+            fills = self.exchange.fetch_my_trades(_to_ccxt_symbol(row["symbol"]), since=since)
+            exit_side = "sell" if side == "long" else "buy"
+            closing = [f for f in fills if f.get("side") == exit_side]
+            if closing:
+                total_amt = sum(float(f["amount"]) for f in closing)
+                total_cost = sum(float(f["price"]) * float(f["amount"]) for f in closing)
+                close_price = total_cost / total_amt if total_amt else entry_price
+                fees = sum(float((f.get("fee") or {}).get("cost") or 0) for f in closing)
+                if side == "long":
+                    realized_pnl = (close_price - entry_price) * qty - fees
+                else:
+                    realized_pnl = (entry_price - close_price) * qty - fees
+        except Exception as e:
+            logger.warning(f"BinanceFuturesBroker: could not fetch closing fills for "
+                           f"{row['symbol']}: {e}")
+
+        return {
+            "trade_id": str(uuid4()),
+            "symbol": row["symbol"],
+            "action": side,
+            "entry_time": entry_time,
+            "entry_price": entry_price,
+            "close_time": datetime.utcnow(),
+            "close_price": close_price,
+            "size_usd": size_usd,
+            "realized_pnl": realized_pnl,
+            "result": "win" if realized_pnl > 0 else "loss",
+        }
