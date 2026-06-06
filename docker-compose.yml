@@ -51,7 +51,9 @@ services:
       - ./tests:/app/tests
     env_file:
       - .env
-    entrypoint: ["uvicorn", "vibe_trading.web.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # --reload: src/ is bind-mounted, so the API hot-reloads on code changes (e.g. new
+    # endpoints) like the frontend does — no manual restart needed. Dev-mode stack.
+    entrypoint: ["uvicorn", "vibe_trading.web.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   vibe-web:
     build: ./web
