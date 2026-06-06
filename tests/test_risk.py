@@ -370,3 +370,65 @@ def test_prop_max_concurrent_trades(current_price, account_balance, extra_positi
     assert res["approved"] is False, (
         f"Expected rejection: {total_open} open positions >= max {max_concurrent}"
     )
+
+
+def test_next_resistance_tp_falls_back_to_rr_when_resistance_below_entry():
+    """Breakout into price discovery: a LONG with take_profit_strategy='next_resistance'
+    when the only resistance is BELOW entry must NOT floor the take-profit to ~entry.
+    It should fall back to the risk/reward multiplier target (rr x stop distance above
+    entry). Regression for the ALLO/USDT TP-at-entry bug."""
+    manager = RiskManager()
+    proposal = {
+        "symbol": "ALLO/USDT",
+        "action": "long",
+        "stop_loss_strategy": "1.5_atr",
+        "take_profit_strategy": "next_resistance",
+        "risk_reward_ratio": 2.0,
+    }
+    # 20 candles, constant 0.02 true range -> ATR ~0.02
+    df = pd.DataFrame({"high": [0.41] * 20, "low": [0.39] * 20, "close": [0.40] * 20})
+    # Resistance (0.36) is BELOW the entry (0.40) — breakout to new highs; support distant.
+    snapshot = {"support_price": 0.30, "resistance_price": 0.36}
+
+    res = manager.evaluate_proposal(
+        proposal=proposal, current_price=0.40, df_4h=df,
+        account_balance=10000.0, peak_balance=10000.0, open_positions=[], snapshot=snapshot,
+    )
+
+    assert res["approved"] is True
+    entry = 0.40
+    tp = float(res["take_profit_price"])
+    stop = float(res["stop_price"])
+    # TP must be a real target above entry, not the trivial floor (~entry).
+    assert tp > entry + 0.5 * (entry - stop), f"TP {tp} collapsed toward entry {entry}"
+    # Specifically: TP distance == rr_ratio * stop distance (the RR fallback).
+    assert abs((tp - entry) - 2.0 * (entry - stop)) < 1e-6
+
+
+def test_next_support_tp_falls_back_to_rr_when_support_above_entry():
+    """Symmetric short case: breakdown below all support. A SHORT with 'next_resistance'
+    (which targets support for shorts) when support is ABOVE entry must fall back to the
+    RR multiplier, not floor the TP to ~entry."""
+    manager = RiskManager()
+    proposal = {
+        "symbol": "ALLO/USDT",
+        "action": "short",
+        "stop_loss_strategy": "1.5_atr",
+        "take_profit_strategy": "next_resistance",
+        "risk_reward_ratio": 2.0,
+    }
+    df = pd.DataFrame({"high": [0.41] * 20, "low": [0.39] * 20, "close": [0.40] * 20})
+    # Support (0.44) is ABOVE entry (0.40) — breakdown to new lows; resistance distant above.
+    snapshot = {"support_price": 0.44, "resistance_price": 0.50}
+
+    res = manager.evaluate_proposal(
+        proposal=proposal, current_price=0.40, df_4h=df,
+        account_balance=10000.0, peak_balance=10000.0, open_positions=[], snapshot=snapshot,
+    )
+
+    assert res["approved"] is True
+    entry = 0.40
+    tp = float(res["take_profit_price"])
+    stop = float(res["stop_price"])
+    assert tp < entry - 0.5 * (stop - entry), f"TP {tp} collapsed toward entry {entry}"
+    assert abs((entry - tp) - 2.0 * (stop - entry)) < 1e-6

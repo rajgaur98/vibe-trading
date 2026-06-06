@@ -117,9 +117,16 @@ class RiskManager:
                     tp_dist = entry_price - (Decimal(str(level)) - buffer)
             else:
                 tp_dist = sl_dist * rr_ratio
+            # The structural level may not be BEYOND entry in the trade direction — e.g. a
+            # breakout into price discovery above all resistance (long) or a breakdown below
+            # all support (short). Then tp_dist <= 0 and the old floor would clamp the
+            # take-profit to ~entry, capping a winner at break-even. Fall back to the
+            # risk/reward multiplier so the target is a real rr x stop distance away.
+            if tp_dist <= 0:
+                tp_dist = sl_dist * rr_ratio
         else:
             tp_dist = sl_dist * rr_ratio
-            
+
         tp_dist = max(tp_dist, Decimal(str(0.001 * current_price)))
         
         if action == "long":
