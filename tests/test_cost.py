@@ -24,3 +24,33 @@ def test_usage_cost_unknown_model_returns_zero():
 
 def test_usage_cost_never_raises_on_zero_tokens():
     assert usage_cost("gemini/gemma-4-31b-it", 0, 0) == 0.0
+
+
+from datetime import datetime
+from vibe_trading.agents.cost import CostEvent
+
+
+def test_cost_event_build_populates_totals_and_cost():
+    ev = CostEvent.build(
+        provider="gemini", model="gemini/gemma-4-31b-it", call_type="single",
+        prompt_tokens=1000, completion_tokens=500, latency_ms=1234.5,
+    )
+    assert ev.provider == "gemini"
+    assert ev.model == "gemini/gemma-4-31b-it"
+    assert ev.call_type == "single"
+    assert ev.prompt_tokens == 1000
+    assert ev.completion_tokens == 500
+    assert ev.total_tokens == 1500
+    assert ev.cost_usd > 0.0           # override-priced
+    assert ev.latency_ms == 1234.5
+    assert ev.call_id                  # non-empty uuid
+    assert isinstance(ev.timestamp, datetime)
+    assert ev.timestamp.tzinfo is None  # naive UTC, matches trades/decision_log convention
+
+
+def test_cost_event_build_unique_call_ids():
+    a = CostEvent.build(provider="g", model="m", call_type="single",
+                        prompt_tokens=1, completion_tokens=1, latency_ms=1.0)
+    b = CostEvent.build(provider="g", model="m", call_type="single",
+                        prompt_tokens=1, completion_tokens=1, latency_ms=1.0)
+    assert a.call_id != b.call_id

@@ -1,5 +1,9 @@
 import logging
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import litellm
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -30,3 +34,38 @@ def usage_cost(model_str: str, prompt_tokens: int, completion_tokens: int) -> fl
         if needle in model_str:
             return prompt_tokens * in_c + completion_tokens * out_c
     return 0.0
+
+
+def _utcnow_naive() -> datetime:
+    """Naive UTC timestamp, matching the trades/decision_log storage convention so the
+    day-boundary query in daily_summary compares consistently."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class CostEvent(BaseModel):
+    call_id: str
+    timestamp: datetime
+    provider: str
+    model: str          # litellm-format model string
+    call_type: str      # "single" | "tool_loop"
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost_usd: float
+    latency_ms: float
+
+    @classmethod
+    def build(cls, *, provider: str, model: str, call_type: str,
+              prompt_tokens: int, completion_tokens: int, latency_ms: float) -> "CostEvent":
+        return cls(
+            call_id=str(uuid4()),
+            timestamp=_utcnow_naive(),
+            provider=provider,
+            model=model,
+            call_type=call_type,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+            cost_usd=usage_cost(model, prompt_tokens, completion_tokens),
+            latency_ms=latency_ms,
+        )
