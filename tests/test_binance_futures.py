@@ -200,3 +200,30 @@ def test_get_open_positions_empty_on_error():
     ex.fetch_positions.side_effect = Exception("boom")
     broker = BinanceFuturesBroker(db=None, exchange=ex)
     assert broker.get_open_positions() == []
+
+
+def test_close_position_reduce_only_and_cancels_brackets():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [
+        {"symbol": "BTC/USDT:USDT", "contracts": 0.5, "side": "long"},
+    ]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.close_position("BTC/USDT")
+
+    assert res["status"] == "success"
+    # reduce-only market SELL of the abs contracts
+    close_call = ex.create_order.call_args_list[-1]
+    assert close_call.args[0] == "BTC/USDT:USDT"
+    assert close_call.args[1] == "market"
+    assert close_call.args[2] == "sell"
+    assert float(close_call.args[3]) == 0.5
+    assert close_call.kwargs["params"]["reduceOnly"] is True
+    ex.cancel_all_orders.assert_called_once_with("BTC/USDT:USDT")
+
+
+def test_close_position_no_position_returns_rejected():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [{"symbol": "BTC/USDT:USDT", "contracts": 0.0}]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.close_position("BTC/USDT")
+    assert res["status"] == "rejected"

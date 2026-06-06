@@ -196,8 +196,53 @@ class BinanceFuturesBroker(BaseBroker):
             logger.warning(f"BinanceFuturesBroker: get_mark_price failed for {symbol}: {e}")
             return None
 
+    def _load_ledger(self) -> List[Dict[str, Any]]:
+        """Read all open positions from the Postgres ledger ([] when db is None)."""
+        if not self.db:
+            return []
+        try:
+            self.db.connect()
+            rows = self.db.conn.execute(
+                "SELECT symbol, side, entry_time, entry_price, size_usd, stop_price, "
+                "take_profit_price FROM open_positions"
+            ).fetchall()
+            return [{
+                "symbol": r[0], "side": r[1], "entry_time": r[2], "entry_price": r[3],
+                "size_usd": r[4], "stop_price": r[5], "take_profit_price": r[6],
+            } for r in rows]
+        finally:
+            self.db.close()
+
+    def _delete_position(self, symbol: str):
+        """Remove a position from the Postgres ledger (no-op when db is None)."""
+        if not self.db:
+            return
+        try:
+            self.db.connect()
+            self.db.conn.execute("DELETE FROM open_positions WHERE symbol = ?", (symbol,))
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: failed to delete ledger row {symbol}: {e}")
+        finally:
+            self.db.close()
+
     def close_position(self, symbol: str) -> Dict[str, Any]:
-        raise NotImplementedError
+        sym = _to_ccxt_symbol(symbol)
+        try:
+            positions = self.exchange.fetch_positions([sym])
+            pos = next((p for p in positions if float(p.get("contracts") or 0) != 0), None)
+            if not pos:
+                self._delete_position(symbol)
+                return {"status": "rejected", "reason": "no open position"}
+            contracts = abs(float(pos["contracts"]))
+            opposite = "sell" if pos.get("side") == "long" else "buy"
+            self.exchange.create_order(sym, "market", opposite, contracts, params={"reduceOnly": True})
+            self.exchange.cancel_all_orders(sym)
+            self._delete_position(symbol)
+            logger.info(f"BinanceFuturesBroker: closed {symbol} ({contracts} contracts)")
+            return {"status": "success"}
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: close_position failed for {symbol}: {e}")
+            return {"status": "rejected", "reason": str(e)}
 
     def update_positions(self, current_prices: Dict[str, float]) -> List[Dict[str, Any]]:
         raise NotImplementedError
