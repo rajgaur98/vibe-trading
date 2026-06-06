@@ -42,3 +42,55 @@ def test_init_missing_creds_raises(monkeypatch):
     monkeypatch.setenv("BINANCE_TESTNET_DRY_RUN", "false")
     with pytest.raises(ValueError, match="BINANCE_TESTNET_API_KEY"):
         BinanceFuturesBroker(db=None)  # no injection → real path → creds required
+
+
+def test_submit_order_long_places_entry_and_brackets():
+    ex = _mock_exchange()
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=1000.0,
+        stop_price=95.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    assert res["status"] == "success"
+    assert res["entry_price"] == 100.0
+    ex.set_leverage.assert_called_once_with(1, "BTC/USDT:USDT")
+
+    # Three orders: market entry, TAKE_PROFIT_MARKET, STOP_MARKET
+    calls = ex.create_order.call_args_list
+    assert len(calls) == 3
+
+    # 1) market BUY of size_usd/mark = 1000/100 = 10.0 (precision-rounded)
+    a0 = calls[0]
+    assert a0.args[0] == "BTC/USDT:USDT"
+    assert a0.args[1] == "market"
+    assert a0.args[2] == "buy"
+    assert float(a0.args[3]) == 10.0
+
+    # 2) TAKE_PROFIT_MARKET SELL closePosition @ tp
+    a1 = calls[1]
+    assert a1.args[1] == "TAKE_PROFIT_MARKET"
+    assert a1.args[2] == "sell"
+    assert a1.kwargs["params"]["closePosition"] is True
+    assert float(a1.kwargs["params"]["stopPrice"]) == 110.0
+
+    # 3) STOP_MARKET SELL closePosition @ sl
+    a2 = calls[2]
+    assert a2.args[1] == "STOP_MARKET"
+    assert a2.args[2] == "sell"
+    assert a2.kwargs["params"]["closePosition"] is True
+    assert float(a2.kwargs["params"]["stopPrice"]) == 95.0
+
+
+def test_submit_order_short_flips_sides():
+    ex = _mock_exchange()
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker.submit_order(
+        symbol="ETH/USDT", action="short", size_usd=1000.0,
+        stop_price=110.0, take_profit_price=90.0, entry_price=100.0,
+    )
+    calls = ex.create_order.call_args_list
+    assert calls[0].args[2] == "sell"   # entry SELL for a short
+    assert calls[1].args[1] == "TAKE_PROFIT_MARKET"
+    assert calls[1].args[2] == "buy"    # exit side BUY
+    assert calls[2].args[1] == "STOP_MARKET"
+    assert calls[2].args[2] == "buy"

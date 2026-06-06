@@ -61,7 +61,77 @@ class BinanceFuturesBroker(BaseBroker):
         take_profit_price: float,
         entry_price: float = 0.0,
     ) -> Dict[str, Any]:
-        raise NotImplementedError
+        sym = _to_ccxt_symbol(symbol)
+        try:
+            self.exchange.set_leverage(self.leverage, sym)
+
+            mark = entry_price if entry_price > 0 else float(self.exchange.fetch_ticker(sym)["last"])
+            qty = float(self.exchange.amount_to_precision(sym, size_usd / mark))
+
+            market = self.exchange.market(sym)
+            limits = market.get("limits", {}) or {}
+            min_cost = (limits.get("cost", {}) or {}).get("min")
+            min_amount = (limits.get("amount", {}) or {}).get("min")
+            if (min_cost is not None and qty * mark < min_cost) or \
+               (min_amount is not None and qty < min_amount):
+                logger.warning(f"BinanceFuturesBroker: {symbol} below exchange minimum "
+                               f"(qty={qty}, notional={qty * mark:.2f}). Skipping.")
+                return {"status": "rejected", "reason": "below exchange minimum"}
+
+            entry_side = "buy" if action == "long" else "sell"
+            exit_side = "sell" if action == "long" else "buy"
+            tp = self.exchange.price_to_precision(sym, take_profit_price)
+            sl = self.exchange.price_to_precision(sym, stop_price)
+
+            if self.dry_run:
+                logger.info(f"[DRY_RUN] {symbol} {action} qty={qty} entry~{mark} TP={tp} SL={sl}")
+                self._persist_position(symbol, action, mark, size_usd, stop_price, take_profit_price)
+                return {"status": "dry_run", "entry_price": mark, "order_ids": {}}
+
+            entry_order = self.exchange.create_order(sym, "market", entry_side, qty)
+            tp_order = self.exchange.create_order(
+                sym, "TAKE_PROFIT_MARKET", exit_side, None,
+                params={"stopPrice": tp, "closePosition": True},
+            )
+            sl_order = self.exchange.create_order(
+                sym, "STOP_MARKET", exit_side, None,
+                params={"stopPrice": sl, "closePosition": True},
+            )
+
+            avg = float(entry_order.get("average") or entry_order.get("price") or mark)
+            self._persist_position(symbol, action, avg, size_usd, stop_price, take_profit_price)
+            logger.info(f"BinanceFuturesBroker: opened {action} {symbol} @ {avg} "
+                        f"(TP={tp}, SL={sl}, size=${size_usd:.2f})")
+            return {
+                "status": "success",
+                "entry_price": avg,
+                "order_ids": {
+                    "entry": entry_order.get("id"),
+                    "take_profit": tp_order.get("id"),
+                    "stop": sl_order.get("id"),
+                },
+            }
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: submit_order failed for {symbol}: {e}")
+            return {"status": "rejected", "reason": str(e)}
+
+    def _persist_position(self, symbol, side, entry_price, size_usd, stop_price, take_profit_price):
+        """Write the open position to the Postgres ledger (no-op when db is None).
+        Reuses the exact SQL PaperBroker uses, so translate_query handles the dialect."""
+        if not self.db:
+            return
+        try:
+            self.db.connect()
+            self.db.conn.execute(
+                """INSERT OR REPLACE INTO open_positions
+                   (symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (symbol, side, datetime.utcnow(), entry_price, size_usd, stop_price, take_profit_price),
+            )
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: failed to persist position {symbol}: {e}")
+        finally:
+            self.db.close()
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
         raise NotImplementedError
