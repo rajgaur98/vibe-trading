@@ -1,0 +1,77 @@
+"""One-off: reset the paper trading account to a clean slate.
+
+Backs up the four account-state tables to a timestamped JSON file, then clears
+them in Supabase Postgres (the authoritative store the live broker uses) and
+seeds a fresh portfolio_state row at the starting balance. Market data
+(candles, features) is left untouched. DuckDB's vestigial copies are cleared
+best-effort.
+
+Run: uv run python scripts/reset_account.py
+"""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv()
+
+from vibe_trading.data.db import Database, PostgresDatabase
+
+ACCOUNT_TABLES = ["open_positions", "trades", "decision_log", "portfolio_state"]
+STARTING_BALANCE = 10000.0
+
+stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+backup_dir = Path("data/backups")
+backup_dir.mkdir(parents=True, exist_ok=True)
+backup_path = backup_dir / f"account-backup-{stamp}.json"
+
+# ---- 1. Backup + clear Postgres (authoritative) ----------------------------
+pg = PostgresDatabase()
+pg.connect()
+backup = {}
+try:
+    for tbl in ACCOUNT_TABLES:
+        cur = pg.conn.execute(f"SELECT * FROM {tbl}")
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        backup[tbl] = rows
+    backup_path.write_text(json.dumps(backup, indent=2, default=str))
+    print(f"Backup written: {backup_path}")
+    for tbl in ACCOUNT_TABLES:
+        print(f"  backed up {len(backup[tbl]):>4d} rows from {tbl}")
+
+    print("\nClearing Postgres account tables...")
+    for tbl in ACCOUNT_TABLES:
+        pg.conn.execute(f"DELETE FROM {tbl}")
+    # Seed a fresh starting balance so the dashboard reflects the reset immediately.
+    pg.conn.execute(
+        "INSERT INTO portfolio_state (timestamp, balance, peak_balance) VALUES (CURRENT_TIMESTAMP, %s, %s)",
+        (STARTING_BALANCE, STARTING_BALANCE),
+    )
+    pg.conn.commit()
+
+    print("Verifying Postgres row counts after reset:")
+    for tbl in ACCOUNT_TABLES:
+        n = pg.conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+        print(f"  {tbl:<16s} {n} rows")
+finally:
+    pg.close()
+
+# ---- 2. Best-effort clear of DuckDB vestigial copies (keep candles/features) ----
+print("\nClearing DuckDB vestigial state tables (candles/features preserved)...")
+duck = Database()
+try:
+    duck.connect()
+    for tbl in ACCOUNT_TABLES:
+        try:
+            duck.conn.execute(f"DELETE FROM {tbl}")
+        except Exception as e:
+            print(f"  (skip {tbl}: {e})")
+    print("  DuckDB state tables cleared.")
+except Exception as e:
+    print(f"  DuckDB cleanup skipped (non-fatal, state is vestigial): {e}")
+finally:
+    duck.close()
+
+print(f"\nDone. Account reset to ${STARTING_BALANCE:,.2f}. Backup at {backup_path}")
