@@ -137,7 +137,23 @@ class BinanceFuturesBroker(BaseBroker):
         raise NotImplementedError
 
     def get_balance(self) -> float:
-        raise NotImplementedError
+        if self.dry_run:
+            self.peak_balance = max(self.peak_balance, 10000.0)
+            return 10000.0
+        try:
+            bal = float(self.exchange.fetch_balance()["USDT"]["total"])
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: get_balance failed: {e}")
+            return 0.0
+        self.peak_balance = max(self.peak_balance, bal)
+        return bal
+
+    def get_mark_price(self, symbol: str) -> Optional[float]:
+        try:
+            return float(self.exchange.fetch_ticker(_to_ccxt_symbol(symbol))["last"])
+        except Exception as e:
+            logger.warning(f"BinanceFuturesBroker: get_mark_price failed for {symbol}: {e}")
+            return None
 
     def close_position(self, symbol: str) -> Dict[str, Any]:
         raise NotImplementedError

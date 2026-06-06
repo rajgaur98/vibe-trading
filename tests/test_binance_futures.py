@@ -133,3 +133,38 @@ def test_submit_order_rounds_via_precision_helpers():
     assert calls[1].kwargs["params"]["stopPrice"] == "110.99"
     assert calls[2].kwargs["params"]["stopPrice"] == "95.12"
     ex.amount_to_precision.assert_called()  # qty rounded too
+
+
+def test_get_mark_price_returns_last():
+    ex = _mock_exchange()
+    ex.fetch_ticker.return_value = {"last": 123.45}
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    assert broker.get_mark_price("BTC/USDT") == 123.45
+    ex.fetch_ticker.assert_called_with("BTC/USDT:USDT")
+
+
+def test_get_mark_price_none_on_error():
+    ex = _mock_exchange()
+    ex.fetch_ticker.side_effect = Exception("network down")
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    assert broker.get_mark_price("BTC/USDT") is None
+
+
+def test_get_balance_dry_run_is_10000(monkeypatch):
+    monkeypatch.setenv("BINANCE_TESTNET_DRY_RUN", "true")
+    ex = _mock_exchange()
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    assert broker.get_balance() == 10000.0
+    assert broker.peak_balance == 10000.0  # peak tracked in-memory
+
+
+def test_get_balance_reads_usdt_total_and_tracks_peak():
+    ex = _mock_exchange()
+    ex.fetch_balance.return_value = {"USDT": {"total": 8500.0}}
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    assert broker.get_balance() == 8500.0
+    assert broker.peak_balance == 8500.0
+    # balance drops; peak holds
+    ex.fetch_balance.return_value = {"USDT": {"total": 8000.0}}
+    assert broker.get_balance() == 8000.0
+    assert broker.peak_balance == 8500.0
