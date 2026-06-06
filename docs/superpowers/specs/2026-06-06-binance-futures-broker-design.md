@@ -92,6 +92,8 @@ via `exchange.price_to_precision` / `exchange.amount_to_precision`):
 
 - **`get_balance() -> float`**: `fetch_balance()["USDT"]["total"]` (dry_run → 10000.0).
 
+- **`get_mark_price(symbol) -> Optional[float]`**: `fetch_ticker(_to_ccxt_symbol(symbol))["last"]` — the futures **last-traded price** (a pragmatic proxy for the mark, and the same basis Binance's `STOP_MARKET`/`TAKE_PROFIT_MARKET` triggers use by default, `workingType=CONTRACT_PRICE`). Used by the scheduler as the **execution-critical price** so entry/proximity-stop decisions match the traded instrument. `BaseBroker` gets a default `get_mark_price` returning `None`; `PaperBroker` keeps `None` (scheduler falls back to the DuckDB 4h close — current behavior). On error → `None` (fall back).
+
 - **`close_position(symbol) -> dict`**: read the live position; `create_order(sym, "market", opposite_side, abs(contracts), params={"reduceOnly": True})`; `cancel_all_orders(sym)` to clear leftover brackets; remove from the ledger.
 
 - **`update_positions(current_prices) -> list[dict]`** (reconciliation; `current_prices` ignored — the exchange is truth): for each symbol in the Postgres `open_positions` ledger, if it is **not** currently open on the exchange (`fetch_positions`), its bracket filled → fetch the closing fill / realized PnL (`fetch_my_trades(sym, since=entry_time_ms)`, take reduce-only closing fills; or position-close income), build a `closed_trade` dict matching the existing `trades` schema (`trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result`), delete it from the ledger, and append to the returned list. The scheduler logs these to `trades` + Discord (existing path). Exchange/network error → log, return `[]` (never crash a tick).
@@ -108,7 +110,15 @@ elif mode == "LIVE_TESTNET":
 else:
     self.broker = PaperBroker(db=self.pg_db)
 ```
-Add a **startup reconcile**: in `start()`, before the recurring loop, call `self.broker.update_positions({})` once and log/record any closes that happened while the bot was down. (For PaperBroker this is a harmless no-op-ish call; guard so it only matters for the futures broker — or simply call it for all brokers since `update_positions({})` with empty prices is safe.) The existing per-tick `update_positions(current_prices)` call already covers periodic reconcile. No other structural change — `submit_order` already passes `entry_price=risk_res["entry_price"]`.
+Add a **startup reconcile**: in `start()`, before the recurring loop, call `self.broker.update_positions({})` once and log/record any closes that happened while the bot was down. (For PaperBroker this is a harmless no-op-ish call; guard so it only matters for the futures broker — or simply call it for all brokers since `update_positions({})` with empty prices is safe.) The existing per-tick `update_positions(current_prices)` call already covers periodic reconcile.
+
+**Execution price = futures mark (TA still spot).** Technical analysis stays on **spot** candles (no eval re-baseline, full history, all symbols — see *Candle source* below). But the *execution-critical* price — the one fed to `trader.decide(current_price=...)` for proximity-based stop selection, to `RiskManager.evaluate_proposal(current_price=...)` for the entry/stop/TP/size math, and to `submit_order(entry_price=...)` — should be the **futures mark**, so the prices we compute match the instrument we actually trade. Per symbol in the entry loop:
+```python
+exec_price = self.broker.get_mark_price(sym)      # None for PaperBroker / on error
+if exec_price is None:
+    exec_price = current_price                    # DuckDB 4h spot close (today's behavior)
+```
+Then pass `exec_price` (not the spot close) into `trader.decide`, `risk_manager.evaluate_proposal`, and `submit_order`. The analyst snapshot is still built from spot candles at `last_ts` and is unaffected. In PAPER/eval mode `get_mark_price` returns `None` so behavior is identical to today.
 
 ### 3. `src/vibe_trading/web/main.py` [MODIFY]
 
@@ -130,11 +140,27 @@ BINANCE_TESTNET_LEVERAGE=1
 # TRADING_MODE=LIVE_TESTNET        # to activate this broker
 ```
 
+## Candle source (decision: keep spot for TA)
+
+TA indicators, S/R levels, ATR, and the eval golden set are all computed from **spot**
+OHLCV (`DataFetcher` uses `defaultType: "spot"`). We deliberately **do not** switch the
+candle source to futures OHLCV, because a blanket swap would: (a) invalidate the committed
+eval baseline (the golden-set labels were derived from spot snapshots → re-label +
+re-baseline); (b) break data for trending alts that have no Binance futures listing (already
+observed live: `binance does not have market symbol BONK/USDT:USDT`); and (c) cause more
+indicator warm-up failures on perps with shallower history. The spot↔perp basis on liquid
+majors is tiny (<~0.1%) relative to the ATR-based stop distance (~1–3%), so TA on spot is
+both standard practice and immaterial here. The *only* place the basis is execution-relevant
+is the current price used for entry/proximity — which we align to the **futures mark** via
+`get_mark_price` (see scheduler §2). Switching the whole candle source to futures OHLCV
+remains possible as a separate, larger piece of work if ever justified.
+
 ## Data Flow (one approved long, LIVE_TESTNET)
 
 ```
-scheduler tick → analyst → trader → RiskManager (approved; entry/stop/tp/size_usd)
-  → BinanceFuturesBroker.submit_order(...)
+scheduler tick → analyst (spot snapshot) → get_mark_price(SYM)=futures last
+  → trader.decide + RiskManager.evaluate (mark = current_price; approved; entry/stop/tp/size_usd)
+  → BinanceFuturesBroker.submit_order(..., entry_price=mark)
        set_leverage(1) ; qty = size_usd / mark (rounded)
        create_order market BUY qty                         → position opens on exchange
        create_order TAKE_PROFIT_MARKET SELL closePosition @ tp   ┐ native bracket held by
@@ -171,13 +197,14 @@ dashboard /api/positions ──► BinanceFuturesBroker.get_open_positions() (li
 7. `update_positions` reconcile: ledger has SYM, `fetch_positions` shows it closed → emits one `closed_trade` with realized PnL + removes it from the ledger.
 8. `close_position`: reduce-only market opposite-side + `cancel_all_orders`.
 9. Precision: a price/qty needing rounding is passed through `price_to_precision`/`amount_to_precision`.
+10. `get_mark_price`: returns `fetch_ticker()["last"]`; on a `ccxt` error returns `None` (fall back). (PaperBroker's default `get_mark_price` returning `None` is asserted in `tests/test_paper_broker.py`.)
 
 **Live verification (manual, needs your testnet keys):** a `scripts/binance_testnet_smoke.py` that, with `BINANCE_TESTNET_*` set, places a tiny long with a bracket, prints the resulting position + open orders, and closes it. I cannot run this — it requires credentials I don't have.
 
 ## Backwards Compatibility
 
 - Additive: `PAPER` (default) and `LIVE_SANDBOX` paths are unchanged. The new broker only activates on `TRADING_MODE=LIVE_TESTNET`.
-- `BaseBroker` interface is unchanged — `BinanceFuturesBroker` implements the same five methods, so the scheduler needs only the selection branch (+ the startup reconcile call, which is safe for all brokers).
+- `BaseBroker` gains one **optional** method, `get_mark_price`, with a default returning `None` — so `PaperBroker`/`CoinbaseBroker` need no change and the scheduler's `exec_price` falls back to the spot close exactly as today. `BinanceFuturesBroker` implements the existing five methods plus this override, so the scheduler needs only the selection branch, the `exec_price` lookup, and the startup reconcile call (all safe for all brokers).
 - The `open_positions` Postgres table is reused as the reconciliation ledger; no schema change.
 
 ## Follow-on (sub-project 2, separate spec)
