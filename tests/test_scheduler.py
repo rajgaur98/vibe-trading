@@ -139,3 +139,57 @@ def test_maybe_start_ws_listener_failopen_returns_none(monkeypatch):
     monkeypatch.setattr("vibe_trading.runtime.scheduler.PostgresDatabase", _boom)
     # A listener-construction failure must NOT propagate (scheduler keeps running).
     assert sched._maybe_start_ws_listener() is None
+
+
+# --- kill switch + spike alarm wrappers (the scheduler glue around the pure cost fns) ---
+
+def _cost_sched(monkeypatch, today_usd, raise_summary=False):
+    sched = _scheduler_without_init()
+    sched.pg_db = MagicMock()
+    sched._cost_blocked_on = None
+    sched._cost_alarmed_on = None
+    alerts = []
+    sched._send_discord_alert = lambda m: alerts.append(m)
+    if raise_summary:
+        def _ds(conn):
+            raise Exception("db down")
+    else:
+        def _ds(conn):
+            return {"today_usd": today_usd, "calls": 1, "projected_monthly_usd": today_usd * 30}
+    monkeypatch.setattr("vibe_trading.runtime.scheduler.daily_summary", _ds)
+    return sched, alerts
+
+
+def test_trading_blocked_when_over_cap(monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_COST_CAP_USD", "10")
+    sched, alerts = _cost_sched(monkeypatch, today_usd=15.0)
+    assert sched._trading_blocked_by_cost() is True
+    assert any("CAP REACHED" in a for a in alerts)
+
+
+def test_trading_not_blocked_under_cap(monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_COST_CAP_USD", "10")
+    sched, alerts = _cost_sched(monkeypatch, today_usd=3.0)
+    assert sched._trading_blocked_by_cost() is False
+    assert alerts == []
+
+
+def test_trading_cap_disabled_when_zero(monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_COST_CAP_USD", "0")
+    sched, alerts = _cost_sched(monkeypatch, today_usd=999.0)
+    assert sched._trading_blocked_by_cost() is False  # cap<=0 disables the kill switch
+
+
+def test_trading_blocked_fail_open_on_summary_error(monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_COST_CAP_USD", "10")
+    sched, alerts = _cost_sched(monkeypatch, today_usd=0.0, raise_summary=True)
+    # A spend-read error must fail OPEN (never halt trading on a logging hiccup).
+    assert sched._trading_blocked_by_cost() is False
+
+
+def test_check_cost_alarm_fires_once_per_day(monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_COST_ALARM_USD", "5")
+    sched, alerts = _cost_sched(monkeypatch, today_usd=9.0)
+    sched._check_cost_alarm()
+    sched._check_cost_alarm()  # same day → must not re-alarm
+    assert sum("COST ALARM" in a for a in alerts) == 1

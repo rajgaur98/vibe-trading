@@ -15,6 +15,19 @@ logger = logging.getLogger(__name__)
 
 litellm.telemetry = False
 
+# Optional: emit each individual LLM call to Langfuse as a first-class generation span
+# (in addition to the @observe agent-method spans, which already nest the calls). Opt-in
+# via env because LiteLLM's Langfuse callback couples to the langfuse SDK version — enable
+# once verified against the deployed langfuse. The decision↔trace join works without this.
+if os.getenv("LITELLM_LANGFUSE_CALLBACK", "false").lower() == "true" \
+        and os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"):
+    try:
+        litellm.success_callback = ["langfuse"]
+        litellm.failure_callback = ["langfuse"]
+        logger.info("LiteLLM Langfuse per-call callback enabled.")
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning(f"Could not enable LiteLLM Langfuse callback: {e}")
+
 
 class SchemaValidationError(Exception):
     """Raised when a structured LLM response cannot be parsed/validated into the
@@ -191,6 +204,11 @@ class LLMClient:
         # which avoids tripping rate limits and the long retry backoffs that follow.
         self.min_call_interval = float(os.getenv("LLM_MIN_CALL_INTERVAL_SECONDS", "0"))
 
+        # Guardrail: hard ceiling on output tokens per call so a degenerate/runaway
+        # response can't bloat cost or latency. The structured outputs + tool-call
+        # args are small, so the default is generous; <= 0 disables the cap.
+        self.max_output_tokens = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096"))
+
         # Dynamic key validation for active provider only
         required_key = _PROVIDER_API_KEY_ENV.get(self.provider)
         if required_key and not os.getenv(required_key):
@@ -243,6 +261,8 @@ class LLMClient:
             "messages": messages,
             "temperature": 0.1,
         }
+        if self.max_output_tokens > 0:
+            kwargs["max_tokens"] = self.max_output_tokens
 
         if response_schema:
             kwargs["response_format"] = response_schema
@@ -294,6 +314,7 @@ class LLMClient:
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.1,
+                max_tokens=self.max_output_tokens or None,
             )
             latency_ms = (time.monotonic() - _t0) * 1000.0
             assistant_msg = response.choices[0].message

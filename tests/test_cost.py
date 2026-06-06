@@ -1,5 +1,26 @@
 import math
+from hypothesis import given, settings, strategies as st
 from vibe_trading.agents.cost import usage_cost, PRICE_OVERRIDES
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    pt=st.integers(min_value=0, max_value=10_000_000),
+    ct=st.integers(min_value=0, max_value=10_000_000),
+    model=st.sampled_from([
+        "gemini/gemma-4-31b-it",          # PRICE_OVERRIDES path
+        "gemini/gemini-3.1-flash-lite",   # litellm-priced path
+        "openai/gpt-4o",                  # litellm-priced path
+        "provider/totally-unknown-model", # unpriced -> 0.0 path
+    ]),
+)
+def test_prop_usage_cost_nonnegative_and_finite(pt, ct, model):
+    """Invariant: for any non-negative token counts and any model (priced, shadow-priced,
+    or unknown), usage_cost returns a finite, non-negative float and never raises."""
+    cost = usage_cost(model, pt, ct)
+    assert isinstance(cost, float)
+    assert cost >= 0.0
+    assert math.isfinite(cost)
 
 
 def test_usage_cost_known_litellm_model_is_positive():

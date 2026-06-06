@@ -119,7 +119,8 @@ def test_call_llm(mock_completion):
             {"role": "system", "content": "system prompt"},
             {"role": "user", "content": "user prompt"}
         ],
-        temperature=0.1
+        temperature=0.1,
+        max_tokens=4096,
     )
 
 from vibe_trading.agents.analyst import TechnicalVolumeAnalyst, AnalystOutput, _extract_json
