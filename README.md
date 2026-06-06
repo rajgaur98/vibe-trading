@@ -185,6 +185,33 @@ docker compose up -d vibe-bot
 
 ---
 
+## Live Testnet Execution (Binance USDⓂ Futures)
+
+Set `TRADING_MODE=LIVE_TESTNET` to execute real orders on the **Binance USDⓂ Futures
+testnet** (`testnet.binancefuture.com`) with native exchange brackets. On entry the broker
+places a market order plus two reduce-only `closePosition` orders — `TAKE_PROFIT_MARKET`
+and `STOP_MARKET` — so the exchange fills whichever triggers first and cancels the sibling,
+**even if the bot is offline**. Leverage is pinned to 1× so risk/sizing semantics match the
+paper model. Futures (not spot) is used because the trader emits **short** as well as long.
+
+- **Setup:** create testnet API keys, put them in `BINANCE_TESTNET_API_KEY` /
+  `BINANCE_TESTNET_API_SECRET`, and set `TRADING_MODE=LIVE_TESTNET`.
+- **Dry run:** `BINANCE_TESTNET_DRY_RUN=true` logs intended orders without placing any —
+  a safe way to verify wiring before sending real testnet orders.
+- **Dashboard:** in this mode `/api/positions` reads open positions **directly from the
+  exchange** (always accurate), falling back to the Postgres ledger on any exchange error.
+- **Bookkeeping:** the Postgres `open_positions` table is the reconciliation ledger; each
+  tick compares it to live exchange positions and records any bracket-closed trade.
+- **TA still uses spot candles** — only the execution price aligns to the futures mark.
+- **Smoke test (manual):** `python scripts/binance_testnet_smoke.py` opens a tiny position
+  with a bracket, prints it, and closes it (requires your testnet keys).
+
+> Real-time fill push via the User Data Stream websocket is a separate follow-on; until
+> then the trade-history log + close alert may lag up to one 4h tick (the exit itself and
+> the dashboard are already real-time).
+
+---
+
 ## Running Tests
 Run unit verification tests using pytest:
 ```bash
