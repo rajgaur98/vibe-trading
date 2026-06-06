@@ -116,7 +116,8 @@ class Database:
                 close_price DOUBLE,
                 size_usd DOUBLE,
                 realized_pnl DOUBLE,
-                result VARCHAR -- 'win' or 'loss'
+                result VARCHAR, -- 'win' or 'loss'
+                decision_id VARCHAR -- FK to decision_log.decision_id (links outcome to decision)
             )
         """)
 
@@ -131,7 +132,8 @@ class Database:
                 take_profit_strategy VARCHAR,
                 risk_reward_ratio DOUBLE,
                 reasoning_summary VARCHAR,
-                agent_transcripts VARCHAR -- JSON string of the transcripts
+                agent_transcripts VARCHAR, -- JSON string of the agent reasoning transcripts
+                trace_id VARCHAR -- Langfuse trace id (join a decision to its trace)
             )
         """)
 
@@ -153,9 +155,22 @@ class Database:
                 entry_price DOUBLE,
                 size_usd DOUBLE,
                 stop_price DOUBLE,
-                take_profit_price DOUBLE
+                take_profit_price DOUBLE,
+                decision_id VARCHAR -- the decision that opened this position (carried to the closed trade)
             )
         """)
+
+        # Idempotent column migrations for pre-existing tables (CREATE IF NOT EXISTS won't
+        # add columns to a table that already exists).
+        for stmt in (
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
+            "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR",
+            "ALTER TABLE open_positions ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
+        ):
+            try:
+                self.conn.execute(stmt)
+            except Exception:
+                pass
 
         logger.info("Database schemas verified.")
 
@@ -174,13 +189,14 @@ def translate_query(sql: str) -> str:
         sql += " ON CONFLICT (call_id) DO NOTHING"
     elif "INSERT OR REPLACE INTO open_positions" in sql:
         sql = sql.replace("INSERT OR REPLACE INTO open_positions", "INSERT INTO open_positions")
-        sql += """ ON CONFLICT (symbol) DO UPDATE SET 
-            side = EXCLUDED.side, 
-            entry_time = EXCLUDED.entry_time, 
-            entry_price = EXCLUDED.entry_price, 
-            size_usd = EXCLUDED.size_usd, 
-            stop_price = EXCLUDED.stop_price, 
-            take_profit_price = EXCLUDED.take_profit_price"""
+        sql += """ ON CONFLICT (symbol) DO UPDATE SET
+            side = EXCLUDED.side,
+            entry_time = EXCLUDED.entry_time,
+            entry_price = EXCLUDED.entry_price,
+            size_usd = EXCLUDED.size_usd,
+            stop_price = EXCLUDED.stop_price,
+            take_profit_price = EXCLUDED.take_profit_price,
+            decision_id = EXCLUDED.decision_id"""
     return sql
 
 
@@ -303,7 +319,8 @@ class PostgresDatabase:
                     entry_price DOUBLE PRECISION,
                     size_usd DOUBLE PRECISION,
                     stop_price DOUBLE PRECISION,
-                    take_profit_price DOUBLE PRECISION
+                    take_profit_price DOUBLE PRECISION,
+                    decision_id VARCHAR
                 )
             """)
             self.conn.execute("""
@@ -317,7 +334,8 @@ class PostgresDatabase:
                     close_price DOUBLE PRECISION,
                     size_usd DOUBLE PRECISION,
                     realized_pnl DOUBLE PRECISION,
-                    result VARCHAR
+                    result VARCHAR,
+                    decision_id VARCHAR
                 )
             """)
             self.conn.execute("""
@@ -330,7 +348,8 @@ class PostgresDatabase:
                     take_profit_strategy VARCHAR,
                     risk_reward_ratio DOUBLE PRECISION,
                     reasoning_summary TEXT,
-                    agent_transcripts TEXT
+                    agent_transcripts TEXT,
+                    trace_id VARCHAR
                 )
             """)
             self.conn.execute("""
@@ -344,9 +363,22 @@ class PostgresDatabase:
                     completion_tokens INTEGER,
                     total_tokens INTEGER,
                     cost_usd DOUBLE PRECISION,
-                    latency_ms DOUBLE PRECISION
+                    latency_ms DOUBLE PRECISION,
+                    cache_read_tokens INTEGER,
+                    cache_write_tokens INTEGER,
+                    schema_ok BOOLEAN
                 )
             """)
+            # Idempotent column migrations for pre-existing Supabase tables.
+            for stmt in (
+                "ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
+                "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR",
+                "ALTER TABLE open_positions ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
+                "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER",
+                "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER",
+                "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS schema_ok BOOLEAN",
+            ):
+                self.conn.execute(stmt)
             self.conn.commit()
             logger.info("Supabase Postgres tables verified successfully.")
         except Exception as e:
