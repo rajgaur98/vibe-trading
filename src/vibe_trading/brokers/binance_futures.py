@@ -91,6 +91,7 @@ class BinanceFuturesBroker(BaseBroker):
         stop_price: float,
         take_profit_price: float,
         entry_price: float = 0.0,
+        decision_id: str = None,
     ) -> Dict[str, Any]:
         sym = _to_ccxt_symbol(symbol)
         try:
@@ -116,7 +117,7 @@ class BinanceFuturesBroker(BaseBroker):
 
             if self.dry_run:
                 logger.info(f"[DRY_RUN] {symbol} {action} qty={qty} entry~{mark} TP={tp} SL={sl}")
-                self._persist_position(symbol, action, mark, size_usd, stop_price, take_profit_price)
+                self._persist_position(symbol, action, mark, size_usd, stop_price, take_profit_price, decision_id)
                 return {"status": "dry_run", "entry_price": mark, "order_ids": {}}
 
             entry_order = self.exchange.create_order(sym, "market", entry_side, qty)
@@ -142,7 +143,7 @@ class BinanceFuturesBroker(BaseBroker):
                 return {"status": "rejected", "reason": f"bracket placement failed: {e}"}
 
             avg = float(entry_order.get("average") or entry_order.get("price") or mark)
-            self._persist_position(symbol, action, avg, size_usd, stop_price, take_profit_price)
+            self._persist_position(symbol, action, avg, size_usd, stop_price, take_profit_price, decision_id)
             logger.info(f"BinanceFuturesBroker: opened {action} {symbol} @ {avg} "
                         f"(TP={tp}, SL={sl}, size=${size_usd:.2f})")
             return {
@@ -187,18 +188,19 @@ class BinanceFuturesBroker(BaseBroker):
             time.sleep(delay)
         return False
 
-    def _persist_position(self, symbol, side, entry_price, size_usd, stop_price, take_profit_price):
+    def _persist_position(self, symbol, side, entry_price, size_usd, stop_price, take_profit_price, decision_id=None):
         """Write the open position to the Postgres ledger (no-op when db is None).
-        Reuses the exact SQL PaperBroker uses, so translate_query handles the dialect."""
+        Reuses the exact SQL PaperBroker uses, so translate_query handles the dialect.
+        `decision_id` links the position back to the decision that opened it."""
         if not self.db:
             return
         try:
             self.db.connect()
             self.db.conn.execute(
                 """INSERT OR REPLACE INTO open_positions
-                   (symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (symbol, side, datetime.utcnow(), entry_price, size_usd, stop_price, take_profit_price),
+                   (symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price, decision_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (symbol, side, datetime.utcnow(), entry_price, size_usd, stop_price, take_profit_price, decision_id),
             )
         except Exception as e:
             logger.error(f"BinanceFuturesBroker: failed to persist position {symbol}: {e}")
@@ -286,11 +288,12 @@ class BinanceFuturesBroker(BaseBroker):
             self.db.connect()
             rows = self.db.conn.execute(
                 "SELECT symbol, side, entry_time, entry_price, size_usd, stop_price, "
-                "take_profit_price FROM open_positions"
+                "take_profit_price, decision_id FROM open_positions"
             ).fetchall()
             return [{
                 "symbol": r[0], "side": r[1], "entry_time": r[2], "entry_price": r[3],
                 "size_usd": r[4], "stop_price": r[5], "take_profit_price": r[6],
+                "decision_id": r[7],
             } for r in rows]
         finally:
             self.db.close()
@@ -400,4 +403,5 @@ class BinanceFuturesBroker(BaseBroker):
             "size_usd": size_usd,
             "realized_pnl": realized_pnl,
             "result": "win" if realized_pnl > 0 else "loss",
+            "decision_id": row.get("decision_id"),
         }

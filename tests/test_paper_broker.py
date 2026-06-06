@@ -52,6 +52,39 @@ def test_paper_broker_get_mark_price_is_none():
     assert broker.get_mark_price("BTC/USDT") is None
 
 
+def test_submit_order_threads_decision_id_to_closed_trade():
+    """decision_id passed at submit time must survive onto the resulting closed trade,
+    so trades.decision_id can link the outcome back to the decision that opened it."""
+    broker = PaperBroker(initial_balance=10000.0, db=None)
+    broker.submit_order(
+        symbol="SOL/USDT",
+        action="long",
+        size_usd=100.0,
+        stop_price=90.0,
+        take_profit_price=110.0,
+        entry_price=100.0,
+        decision_id="dec-xyz",
+    )
+    assert broker.positions["SOL/USDT"]["decision_id"] == "dec-xyz"
+
+    closed = broker.update_positions({"SOL/USDT": 110.0})
+    assert len(closed) == 1
+    assert closed[0]["decision_id"] == "dec-xyz"
+
+
+def test_submit_order_without_decision_id_closed_trade_has_none():
+    """Backward-compatible: omitting decision_id yields a None-keyed closed trade
+    (never a KeyError)."""
+    broker = PaperBroker(initial_balance=10000.0, db=None)
+    broker.submit_order(
+        symbol="SOL/USDT", action="long", size_usd=100.0,
+        stop_price=90.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    closed = broker.update_positions({"SOL/USDT": 110.0})
+    assert len(closed) == 1
+    assert closed[0]["decision_id"] is None
+
+
 def test_submit_order_filled_position_pnl_math_uses_immediate_entry():
     """When entry_price is set at submit time, the next update tick should be able to
     resolve SL/TP without doing the lazy-fill detour."""

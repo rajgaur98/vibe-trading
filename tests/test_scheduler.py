@@ -47,12 +47,44 @@ def test_record_closed_trades_inserts_and_alerts(monkeypatch):
         "entry_time": datetime(2026, 6, 1), "entry_price": 100.0,
         "close_time": datetime(2026, 6, 2), "close_price": 110.0,
         "size_usd": 1000.0, "realized_pnl": 99.6, "result": "win",
+        "decision_id": "dec-42",
     }]
     sched._record_closed_trades(trades)
 
     assert fake_conn.execute.call_count == 1            # one INSERT
     assert fake_pg.connect.called and fake_pg.close.called  # own connection lifecycle
     assert len(alerts) == 1 and "BTC/USDT" in alerts[0]
+
+    # the INSERT must link the trade back to the decision that opened it
+    insert_call = fake_conn.execute.call_args
+    insert_sql, insert_params = insert_call.args[0], insert_call.args[1]
+    assert "decision_id" in insert_sql              # column present in the INSERT list
+    assert "dec-42" in insert_params                # value threaded through
+
+
+def test_record_closed_trades_decision_id_defaults_none(monkeypatch):
+    """A closed trade lacking a decision_id (e.g. an orphan reconcile) must still
+    INSERT cleanly — decision_id falls back to None rather than KeyError-ing."""
+    sched = _scheduler_without_init()
+    fake_conn = MagicMock()
+    fake_pg = MagicMock()
+    fake_pg.conn = fake_conn
+    monkeypatch.setattr("vibe_trading.runtime.scheduler.PostgresDatabase",
+                        MagicMock(return_value=fake_pg))
+    sched._send_discord_alert = lambda msg: None
+
+    trades = [{
+        "trade_id": "t2", "symbol": "ETH/USDT", "action": "short",
+        "entry_time": datetime(2026, 6, 1), "entry_price": 100.0,
+        "close_time": datetime(2026, 6, 2), "close_price": 90.0,
+        "size_usd": 500.0, "realized_pnl": 49.0, "result": "win",
+        # NOTE: no "decision_id" key
+    }]
+    sched._record_closed_trades(trades)
+
+    assert fake_conn.execute.call_count == 1
+    insert_params = fake_conn.execute.call_args.args[1]
+    assert None in insert_params  # decision_id defaulted to None, no KeyError
 
 
 def test_record_closed_trades_empty_is_noop(monkeypatch):

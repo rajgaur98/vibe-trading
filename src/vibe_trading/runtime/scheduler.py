@@ -7,6 +7,7 @@ import json
 from apscheduler.schedulers.blocking import BlockingScheduler
 from langfuse import observe, propagate_attributes
 
+from vibe_trading import audit
 from vibe_trading.data.db import Database, PostgresDatabase
 from vibe_trading.data.fetcher import DataFetcher
 from vibe_trading.features.pipeline import FeaturePipeline
@@ -182,18 +183,44 @@ class TradingScheduler:
                     open_positions = self.broker.get_open_positions()
                     proposal = self.trader.decide(sym, analyst_report, self.scorecard, open_positions, current_price=exec_price)
                     
+                    # Capture the current Langfuse trace id so a decision can be joined to
+                    # its trace. sync_and_evaluate is @observe-decorated, so we're inside a
+                    # span here. Fail-safe: any Langfuse hiccup → trace_id stays None.
+                    trace_id = self._current_trace_id()
+
                     # Step 3: Log decision to database
                     self.pg_db.connect()
                     try:
                         self.pg_db.conn.execute("""
-                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
                               proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
-                              proposal["reasoning_summary"], json.dumps(snapshot, default=str)))
+                              proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id))
                     finally:
                         self.pg_db.close()
-                    
+
+                    # Append-only Parquet audit record for EVERY decision (including FLAT).
+                    # Unlike decision_log.agent_transcripts (which stores the feature
+                    # snapshot), this captures the REAL analyst + trader reasoning so the
+                    # full decision corpus is queryable later.
+                    audit.append_decision({
+                        "decision_id": proposal["decision_id"],
+                        "timestamp": proposal["timestamp"],
+                        "symbol": proposal["symbol"],
+                        "action": proposal["action"],
+                        "stop_loss_strategy": proposal["stop_loss_strategy"],
+                        "take_profit_strategy": proposal["take_profit_strategy"],
+                        "risk_reward_ratio": float(proposal["risk_reward_ratio"]),
+                        "reasoning_summary": proposal["reasoning_summary"],
+                        "trace_id": trace_id,
+                        "agent_transcripts": {
+                            "analyst": analyst_report.model_dump(),
+                            "trader": proposal,
+                        },
+                        "snapshot": snapshot,
+                    })
+
                     if proposal["action"] == "flat":
                         logger.info(f"Head Trader decided FLAT for {sym}. Reasoning: {proposal['reasoning_summary']}")
                         continue
@@ -221,6 +248,7 @@ class TradingScheduler:
                             stop_price=risk_res["stop_price"],
                             take_profit_price=risk_res["take_profit_price"],
                             entry_price=risk_res["entry_price"],
+                            decision_id=proposal["decision_id"],
                         )
                         
                         self._send_discord_alert(
@@ -269,10 +297,11 @@ class TradingScheduler:
         try:
             for trade in closed_trades:
                 pg.conn.execute("""
-                    INSERT INTO trades (trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO trades (trade_id, symbol, action, entry_time, entry_price, close_time, close_price, size_usd, realized_pnl, result, decision_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (trade["trade_id"], trade["symbol"], trade["action"], trade["entry_time"], trade["entry_price"],
-                      trade["close_time"], trade["close_price"], trade["size_usd"], trade["realized_pnl"], trade["result"]))
+                      trade["close_time"], trade["close_price"], trade["size_usd"], trade["realized_pnl"], trade["result"],
+                      trade.get("decision_id")))
         finally:
             pg.close()
         for trade in closed_trades:
@@ -281,6 +310,17 @@ class TradingScheduler:
                 f"Entry: ${trade['entry_price']:.2f} | Exit: ${trade['close_price']:.2f}\n"
                 f"PnL: **${trade['realized_pnl']:.2f}** ({trade['result'].upper()})"
             )
+
+    def _current_trace_id(self):
+        """Return the active Langfuse trace id (Langfuse 4.x) so a decision can be
+        joined to its trace. Returns None on any failure — observability must never
+        break the trading loop."""
+        try:
+            from langfuse import get_client
+            return get_client().get_current_trace_id()
+        except Exception as e:
+            logger.warning(f"Could not capture Langfuse trace id (non-fatal): {e}")
+            return None
 
     def _resolve_exec_price(self, sym: str, fallback: float) -> float:
         """Execution-critical price: the broker's futures mark when available

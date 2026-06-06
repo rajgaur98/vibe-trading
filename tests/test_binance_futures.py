@@ -298,6 +298,37 @@ def test_update_positions_reconciles_closed_trade():
     assert {"trade_id", "close_time", "size_usd"} <= set(t.keys())
 
 
+def test_update_positions_threads_decision_id_from_ledger():
+    """A ledger row carrying decision_id must surface it on the closed trade."""
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = []  # flat on exchange → closed by bracket
+    ex.fetch_my_trades.return_value = [
+        {"side": "sell", "price": 110.0, "amount": 10.0, "fee": {"cost": 0.0}},
+    ]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker._load_ledger = lambda: [{
+        "symbol": "BTC/USDT", "side": "long", "entry_time": _dt(2026, 6, 1),
+        "entry_price": 100.0, "size_usd": 1000.0, "stop_price": 95.0,
+        "take_profit_price": 110.0, "decision_id": "dec-bf",
+    }]
+    closed = broker.update_positions({})
+    assert len(closed) == 1
+    assert closed[0]["decision_id"] == "dec-bf"
+
+
+def test_build_closed_trade_decision_id_defaults_none():
+    """A ledger row without decision_id yields a None-keyed closed trade (no KeyError)."""
+    ex = _mock_exchange()
+    ex.fetch_my_trades.return_value = []
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    trade = broker._build_closed_trade({
+        "symbol": "BTC/USDT", "side": "long", "entry_time": _dt(2026, 6, 1),
+        "entry_price": 100.0, "size_usd": 1000.0, "stop_price": 95.0,
+        "take_profit_price": 110.0,  # no decision_id
+    })
+    assert trade["decision_id"] is None
+
+
 def test_update_positions_keeps_still_open_position():
     ex = _mock_exchange()
     ex.fetch_positions.return_value = [

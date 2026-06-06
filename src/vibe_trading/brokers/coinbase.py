@@ -44,6 +44,7 @@ class CoinbaseBroker(BaseBroker):
         stop_price: float,
         take_profit_price: float,
         entry_price: float = 0.0,
+        decision_id: str = None,
     ) -> Dict[str, Any]:
         """
         Places a market order on Coinbase Advanced to enter the position,

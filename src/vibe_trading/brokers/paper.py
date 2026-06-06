@@ -40,7 +40,7 @@ class PaperBroker(BaseBroker):
 
             # 2. Load open positions
             rows = self.db.conn.execute(
-                "SELECT symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price FROM open_positions"
+                "SELECT symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price, decision_id FROM open_positions"
             ).fetchall()
             for r in rows:
                 symbol = r[0]
@@ -51,7 +51,8 @@ class PaperBroker(BaseBroker):
                     "entry_price": r[3],
                     "size_usd": r[4],
                     "stop_price": r[5],
-                    "take_profit_price": r[6]
+                    "take_profit_price": r[6],
+                    "decision_id": r[7],
                 }
             if rows:
                 logger.info(f"PaperBroker: Loaded {len(rows)} open positions from DB")
@@ -82,9 +83,9 @@ class PaperBroker(BaseBroker):
         try:
             self.db.connect()
             self.db.conn.execute("""
-                INSERT OR REPLACE INTO open_positions (symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (pos["symbol"], pos["side"], pos["entry_time"], pos["entry_price"], pos["size_usd"], pos["stop_price"], pos["take_profit_price"]))
+                INSERT OR REPLACE INTO open_positions (symbol, side, entry_time, entry_price, size_usd, stop_price, take_profit_price, decision_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (pos["symbol"], pos["side"], pos["entry_time"], pos["entry_price"], pos["size_usd"], pos["stop_price"], pos["take_profit_price"], pos.get("decision_id")))
         except Exception as e:
             logger.error(f"PaperBroker: Failed to save position for {pos['symbol']}: {e}")
         finally:
@@ -118,6 +119,7 @@ class PaperBroker(BaseBroker):
         stop_price: float,
         take_profit_price: float,
         entry_price: float = 0.0,
+        decision_id: str = None,
     ) -> Dict[str, Any]:
         if symbol in self.positions:
             logger.warning(f"PaperBroker: Position already exists for {symbol}. Skipping order.")
@@ -132,7 +134,8 @@ class PaperBroker(BaseBroker):
             "size_usd": size_usd,
             "stop_price": stop_price,
             "take_profit_price": take_profit_price,
-            "entry_time": datetime.utcnow()
+            "entry_time": datetime.utcnow(),
+            "decision_id": decision_id,
         }
 
         self.positions[symbol] = position
@@ -214,7 +217,8 @@ class PaperBroker(BaseBroker):
                     "close_price": exit_price,
                     "size_usd": size_usd,
                     "realized_pnl": pnl,
-                    "result": "win" if pnl > 0 else "loss"
+                    "result": "win" if pnl > 0 else "loss",
+                    "decision_id": pos.get("decision_id"),
                 }
                 
                 self.trade_history.append(closed_info)

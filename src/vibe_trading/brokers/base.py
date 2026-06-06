@@ -24,12 +24,17 @@ class BaseBroker(ABC):
         stop_price: float,
         take_profit_price: float,
         entry_price: float = 0.0,
+        decision_id: str = None,
     ) -> Dict[str, Any]:
         """Submits an entry order with OCO stop and profit targets.
 
         `entry_price`: when > 0, the position is filled at submission (live paper trading
         path). When 0.0, the broker may lazily fill `entry_price` on the next
         `update_positions` tick (backtester path that simulates next-candle fill).
+
+        `decision_id`: the decision_log id that produced this order. It is persisted on
+        the open position and carried through to the resulting closed trade, so the
+        outcome can be joined back to the decision that opened it (None when unknown).
         """
         pass
 
