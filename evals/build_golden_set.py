@@ -73,6 +73,38 @@ CANDIDATES: list[tuple[str, str, str, str]] = [
     ("LINK/USDT",  "2026-03-26T12:00:00Z", "bearish_directional",             "link-mar-short"),
     ("NEAR/USDT",  "2026-03-26T08:00:00Z", "bearish_directional",             "near-mar-short"),
     ("AVAX/USDT",  "2026-03-23T00:00:00Z", "bearish_directional",             "avax-mar-short"),
+
+    # ------------------------------------------------------------------
+    # Expansion batch (023+): broaden symbol coverage to the deeper-history
+    # alts (DOT / LTC / ONDO / TAO — previously absent) and add more cases in
+    # under-represented regimes (range chop, oversold, overbought, volume
+    # divergence, transitional). Curated from a denser `scan_candidates` pass
+    # over these symbols; every (symbol, ts) below produces a non-empty
+    # snapshot. Category tags reflect the snapshot's actual derived regime.
+    # ------------------------------------------------------------------
+    # New-symbol strong-bearish shorts (DOT / LTC / TAO never appeared before)
+    ("DOT/USDT",   "2026-03-01T16:00:00Z", "strong_bearish_trend",            "dot-mar-bearish"),
+    ("LTC/USDT",   "2026-03-18T08:00:00Z", "strong_bearish_trend",            "ltc-mar-bearish"),
+    ("TAO/USDT",   "2026-03-18T00:00:00Z", "transitional",                    "tao-mar-transitional"),
+
+    # New-symbol directional long (ONDO bullish breakout at resistance)
+    ("ONDO/USDT",  "2026-05-23T20:00:00Z", "bullish_breakout_at_resistance",  "ondo-may-long"),
+
+    # Overbought exhaustion on a new symbol (LTC) — bias bullish but flat (don't chase)
+    ("LTC/USDT",   "2026-02-25T12:00:00Z", "overbought_exhaustion",           "ltc-feb-overbought"),
+
+    # Oversold bounce setups on new symbols (DOT / ONDO)
+    ("DOT/USDT",   "2026-01-19T00:00:00Z", "oversold_bounce_setup",           "dot-jan-oversold"),
+    ("ONDO/USDT",  "2026-01-18T20:00:00Z", "oversold_bounce_setup",           "ondo-jan-oversold"),
+
+    # Range-bound chop on a new symbol (LTC) — neutral, no edge
+    ("LTC/USDT",   "2026-02-17T04:00:00Z", "range_bound_chop",                "ltc-feb-range"),
+
+    # Volume-divergence / transitional spread across new + existing symbols
+    ("DOT/USDT",   "2026-02-04T16:00:00Z", "bullish_price_obv_divergent",     "dot-feb-divergence"),
+    ("TAO/USDT",   "2026-01-27T00:00:00Z", "bullish_breakout_at_resistance",  "tao-jan-breakout"),
+    ("AVAX/USDT",  "2026-02-09T08:00:00Z", "transitional",                    "avax-feb-transitional"),
+    ("NEAR/USDT",  "2026-01-22T20:00:00Z", "transitional",                    "near-jan-transitional"),
 ]
 
 

@@ -245,29 +245,33 @@ EVAL_JUDGE_MODEL=claude-3-5-haiku-20241022 uv run python -m vibe_trading.eval.ev
 # (default 3s; the committed baseline was produced on Gemma 4 31B at 5s)
 uv run python -m vibe_trading.eval.eval --throttle-seconds 5
 
-# Evaluate the SAME tool-use path production runs (slower, more LLM calls).
-# Default is the fast snapshot path (what the committed baseline measures);
-# the tool-loop path produces different scores and needs its own --update-baseline.
-uv run python -m vibe_trading.eval.eval --analyst-path tool-loop
+# Run the fast single-call snapshot path for quick local iteration only
+# (NOT what production runs — scores differently from the default).
+uv run python -m vibe_trading.eval.eval --analyst-path snapshot
 ```
 
-**Eval vs prod path.** By default the eval exercises the analyst's fast single-call
-*snapshot* path (cheap, deterministic — the regression-gate default the committed
-baseline is measured on). Production runs the multi-turn *tool-use* path. To verify
-exactly what ships, run `--analyst-path tool-loop`; it makes ~6× the LLM calls per case
-(much slower on a high-latency model) and yields different scores, so seed it with its
-own `--update-baseline` rather than comparing against the snapshot baseline.
+**Eval vs prod path — same code path everywhere.** The eval **defaults to the
+`tool-loop` path**, which is the *exact* multi-turn tool-use path production runs, so
+the harness exercises what actually ships. (The legacy `--analyst-path snapshot` mode
+is the fast single-call path, kept for quick local iteration; it is *not* what prod
+runs.) Because the tool-loop path makes ~6× the LLM calls per case and yields different
+scores than the old snapshot path, **the committed `evals/baseline.json` must be
+regenerated for the tool-loop path** — seed it once with `--update-baseline` against
+the tool-loop run. Until then a stale snapshot-era baseline will report spurious diffs.
 
 The judge defaults to whatever `LLM_MODEL` is set to, so switching `LLM_PROVIDER`
 flips all four call sites (analyst, trader, and both judges) together — no risk of
 the judge pointing at a model the active provider doesn't host. Set
 `EVAL_JUDGE_MODEL` only when you deliberately want a different judge.
 
-The golden-set YAMLs live in `evals/snapshots/` — 14 real cases derived from DuckDB
+The golden-set YAMLs live in `evals/snapshots/` — 34 real cases derived from DuckDB
 candle history via `evals/scan_candidates.py` (regime bucketing) and labeled by
-`evals/build_golden_set.py` (deterministic Murphy-rule voting). Both generator scripts
-are committed so the derivation logic is reviewable; rerun them after curating new
-candidate timestamps.
+`evals/build_golden_set.py` (deterministic Murphy-rule voting, no LLM). Both generator
+scripts are committed so the derivation logic is reviewable; rerun them after curating
+new candidate timestamps. The set spans 12 symbols (BTC, ETH, SOL, SUI, LINK, AVAX,
+DOT, LTC, ONDO, TAO, NEAR, PENGU) across the strong-trend, breakout, overbought,
+oversold, range-chop, volume-divergence, and transitional regimes, with a mix of
+long / short / flat trader actions — comfortably inside the rubric's 30–100 pair band.
 
 Reports land in `data/reports/eval-<timestamp>.json` (gitignored). The regression
 yardstick is `evals/baseline.json`, committed to git so prompt-impact diffs are

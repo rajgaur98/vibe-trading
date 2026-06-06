@@ -1,0 +1,31 @@
+id: 023-dot-mar-bearish
+description: 'Strong Bearish Trend for DOT/USDT at 2026-03-01T16:00:00+00:00. Derived
+  labels: bias=bearish, volume=confirmed, confluence=0.75, trader_action=short. RSI=49.9
+  (neutral), MACD_hist=-0.0145 (bearish_momentum_expanding), OBV=distribution, ADX=32.4
+  (strong_trend).'
+symbol: DOT/USDT
+timestamp: 2026-03-01 16:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: confirmed
+  nearest_support: 1.522
+  nearest_resistance: 1.576
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - bearish bias
+    - distribution confirms weakness
+    must_not_mention:
+    - bullish reversal call
+trader_label:
+  action: short
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: 3.0_atr
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - align with bearish bias
+    - risk-managed entry
+    must_not_mention:
+    - fight the trend

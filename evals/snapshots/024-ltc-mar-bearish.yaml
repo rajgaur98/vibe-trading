@@ -1,0 +1,31 @@
+id: 024-ltc-mar-bearish
+description: 'Strong Bearish Trend for LTC/USDT at 2026-03-18T08:00:00+00:00. Derived
+  labels: bias=bearish, volume=confirmed, confluence=1.0, trader_action=short. RSI=39.3
+  (approaching_oversold), MACD_hist=-0.2771 (bearish_momentum_expanding), OBV=distribution,
+  ADX=40.2 (strong_trend).'
+symbol: LTC/USDT
+timestamp: 2026-03-18 08:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: confirmed
+  nearest_support: 55.0
+  nearest_resistance: 55.53
+  confluence_score: 1.0
+  thesis_rubric:
+    must_mention:
+    - bearish bias
+    - distribution confirms weakness
+    must_not_mention:
+    - bullish reversal call
+trader_label:
+  action: short
+  stop_loss_strategy: tight_atr
+  take_profit_strategy: 3.0_atr
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - align with bearish bias
+    - risk-managed entry
+    must_not_mention:
+    - fight the trend

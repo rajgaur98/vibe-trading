@@ -1,0 +1,30 @@
+id: 029-ondo-jan-oversold
+description: 'Oversold Bounce Setup for ONDO/USDT at 2026-01-18T20:00:00+00:00. Derived
+  labels: bias=bearish, volume=confirmed, confluence=1.0, trader_action=flat. RSI=23.1
+  (oversold), MACD_hist=-0.0035 (bearish_momentum_expanding), OBV=distribution, ADX=26.1
+  (strong_trend).'
+symbol: ONDO/USDT
+timestamp: 2026-01-18 20:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: confirmed
+  nearest_support: 0.355
+  nearest_resistance: 0.385
+  confluence_score: 1.0
+  thesis_rubric:
+    must_mention:
+    - oversold RSI
+    - potential mean-reversion
+    must_not_mention:
+    - sell into the dip
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

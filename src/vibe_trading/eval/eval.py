@@ -47,12 +47,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                              "wall-clock is bounded by the throttle, not by calls x latency.")
     parser.add_argument("--quiet", action="store_true",
                         help="Suppress per-case progress logging.")
-    parser.add_argument("--analyst-path", choices=["snapshot", "tool-loop"], default="snapshot",
-                        help="Which analyst code path to evaluate. 'snapshot' (default): the fast "
-                             "single-call path — the regression-gate default; the committed baseline "
-                             "is measured on it. 'tool-loop': the SAME multi-turn tool-use path "
-                             "production runs (slower, more LLM calls, different scores → needs its "
-                             "own --update-baseline). Use it to verify what actually ships.")
+    parser.add_argument("--analyst-path", choices=["snapshot", "tool-loop"], default="tool-loop",
+                        help="Which analyst code path to evaluate. 'tool-loop' (DEFAULT): the SAME "
+                             "multi-turn tool-use path PRODUCTION runs — same code path everywhere, "
+                             "so the eval exercises exactly what ships (slower, more LLM calls). "
+                             "'snapshot': the fast single-call path (cheap, deterministic) for quick "
+                             "local iteration only. NOTE: the committed evals/baseline.json must be "
+                             "REGENERATED for the tool-loop path (it scores differently than the old "
+                             "snapshot baseline) — re-seed it once with --update-baseline.")
     args = parser.parse_args(argv)
 
     if not args.quiet:

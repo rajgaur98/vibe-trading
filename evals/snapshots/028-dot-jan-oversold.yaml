@@ -1,0 +1,30 @@
+id: 028-dot-jan-oversold
+description: 'Oversold Bounce Setup for DOT/USDT at 2026-01-19T00:00:00+00:00. Derived
+  labels: bias=bearish, volume=confirmed, confluence=0.75, trader_action=flat. RSI=28.3
+  (oversold), MACD_hist=-0.0205 (bearish_momentum_expanding), OBV=distribution, ADX=19.9
+  (weak_trend).'
+symbol: DOT/USDT
+timestamp: 2026-01-19 00:00:00+00:00
+analyst_label:
+  market_bias: bearish
+  volume_confirmation: confirmed
+  nearest_support: 1.961
+  nearest_resistance: 1.955
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - oversold RSI
+    - potential mean-reversion
+    must_not_mention:
+    - sell into the dip
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

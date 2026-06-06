@@ -1,0 +1,31 @@
+id: 026-ondo-may-long
+description: 'Bullish Breakout At Resistance for ONDO/USDT at 2026-05-23T20:00:00+00:00.
+  Derived labels: bias=bullish, volume=weak, confluence=0.75, trader_action=long.
+  RSI=58.9 (neutral), MACD_hist=0.0008 (bullish_momentum_expanding), OBV=neutral,
+  ADX=34.4 (strong_trend).'
+symbol: ONDO/USDT
+timestamp: 2026-05-23 20:00:00+00:00
+analyst_label:
+  market_bias: bullish
+  volume_confirmation: weak
+  nearest_support: 0.4019
+  nearest_resistance: 0.4157
+  confluence_score: 0.75
+  thesis_rubric:
+    must_mention:
+    - bullish bias
+    - weak volume confirmation
+    must_not_mention:
+    - strong-conviction breakout call
+trader_label:
+  action: long
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: next_resistance
+  risk_reward_ratio: 2.0
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - align with bullish bias
+    - asymmetric reward
+    must_not_mention:
+    - enter despite weak confluence

@@ -1,28 +1,41 @@
 # ============================================================
-# CI – hermetic pytest suite (no secrets required)
+# CI – two jobs
 #
-# What this runs:
-#   uv run pytest -v
-#   ~130 unit tests across tests/; all LLM calls are mocked,
-#   no network access, no API keys, no Postgres needed.
+# 1. `test` (always runs, hermetic, no secrets):
+#      uv run pytest -v
+#      ~130 unit tests across tests/; all LLM calls are mocked,
+#      no network access, no API keys, no Postgres needed.
+#      This is the merge-blocking gate.
 #
-# What is NOT here by design:
-#   The LLM eval baseline gate (`python -m vibe_trading.eval.eval`)
-#   requires live LLM provider credentials (Gemini/OpenAI/etc.),
-#   a running Postgres database, and costs real money + takes
-#   several minutes per run.  It is therefore a LOCAL pre-merge
-#   step, not a default CI job.
+# 2. `eval` (secrets-gated, manual + default-branch push only):
+#      uv run python -m vibe_trading.eval.eval
+#      Scores the analyst+trader prompts against the hand-labeled
+#      golden set in evals/snapshots/ on the SAME tool-loop path
+#      production runs (the eval's default). It makes real, paid
+#      LLM calls, so it ONLY runs when an LLM provider key is
+#      present in the repo/environment secrets.
 #
-#   Extension path: if you want to add an optional eval gate,
-#   add a second job with `on: workflow_dispatch` (or a separate
-#   workflow file) guarded by `if: secrets.GEMINI_API_KEY != ''`
-#   so it only runs when the relevant secrets are present in the
-#   repo/environment and is never triggered automatically.
+#      Gating (so it NEVER spuriously blocks a merge):
+#        * Triggers on workflow_dispatch (manual) AND on push to
+#          the default branch (main / master) — never on PRs/forks,
+#          which don't have access to secrets anyway.
+#        * A guard step checks `secrets.GEMINI_API_KEY`; if empty
+#          (forks, secret-less environments) the job exits 0 early
+#          and the remaining steps are skipped.
+#        * The eval needs DuckDB candle history (data/vibe_trading.db,
+#          which is gitignored), so the job bootstraps it from the
+#          exchange first. Both bootstrap and the eval run with
+#          continue-on-error so a network hiccup or empty DB reports
+#          a warning instead of failing the workflow.
+#        * The eval does NOT require Postgres: LLMClient's cost sink
+#          is None unless explicitly installed at app startup, which
+#          the eval entrypoint never does — so no DB service here.
 # ============================================================
 
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -73,3 +86,91 @@ jobs:
       # ----------------------------------------------------------
       - name: Run pytest
         run: uv run pytest -v
+
+  # ============================================================
+  # Optional LLM eval gate — secrets-gated, never blocks merges.
+  # Runs the eval on the production tool-loop path (the default)
+  # against the golden set. Skips itself cleanly when no LLM key
+  # is configured (e.g. on forks).
+  # ============================================================
+  eval:
+    name: LLM eval (golden set, tool-loop)
+    # Only on manual dispatch or a push to the default branch — never on PRs
+    # (PRs/forks have no secret access, so the eval can't run there anyway).
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+
+    env:
+      # LLM provider config. GEMINI_API_KEY is the gate; LLM_PROVIDER/LLM_MODEL
+      # fall back to the eval's own defaults (gemini / gemini-3.1-flash-lite) if
+      # the corresponding secrets are unset.
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      # POSTGRES_URL is wired through for completeness, but the eval does NOT
+      # require it (the cost sink stays None unless an app explicitly installs
+      # one — eval.py never does). Harmless if the secret is absent.
+      POSTGRES_URL: ${{ secrets.POSTGRES_URL }}
+
+    steps:
+      # Guard: if no LLM key is present, exit the job successfully and skip the
+      # rest. `secrets.*` cannot be referenced in step-level `if:`, so we copy
+      # the env var (set from the secret above) into the step output and gate
+      # subsequent steps on it. This is what prevents the job from ever
+      # spuriously failing a merge when secrets aren't configured.
+      - name: Check for LLM key
+        id: gate
+        run: |
+          if [ -z "${GEMINI_API_KEY}" ]; then
+            echo "No GEMINI_API_KEY configured — skipping eval (this is expected on forks)."
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "LLM key present — running eval."
+            echo "have_key=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.gate.outputs.have_key == 'true'
+        uses: actions/checkout@v4
+
+      - name: Install TA-Lib C library from source
+        if: steps.gate.outputs.have_key == 'true'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential wget
+          wget -q https://github.com/TA-Lib/ta-lib/releases/download/v0.4.0/ta-lib-0.4.0-src.tar.gz
+          tar -xzf ta-lib-0.4.0-src.tar.gz
+          cd ta-lib/
+          ./configure --prefix=/usr
+          make -j"$(nproc)"
+          sudo make install
+          sudo ldconfig
+
+      - name: Install uv
+        if: steps.gate.outputs.have_key == 'true'
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.12
+        if: steps.gate.outputs.have_key == 'true'
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        if: steps.gate.outputs.have_key == 'true'
+        run: uv sync --extra dev
+
+      # The eval reads candle history from DuckDB (data/vibe_trading.db), which is
+      # gitignored and therefore absent on a fresh checkout. Bootstrap it from the
+      # exchange. Resilient: a network failure here is reported but does not fail
+      # the workflow — the eval step below detects the missing/empty DB and skips.
+      - name: Bootstrap DuckDB candle history
+        if: steps.gate.outputs.have_key == 'true'
+        continue-on-error: true
+        run: uv run python -m vibe_trading.cli bootstrap
+
+      # Run the eval on the default tool-loop path (same code path production runs).
+      # continue-on-error so an empty DB / provider rate limit never blocks a merge;
+      # the regression verdict is informational on this gated job.
+      - name: Run LLM eval (tool-loop, golden set)
+        if: steps.gate.outputs.have_key == 'true'
+        continue-on-error: true
+        run: uv run python -m vibe_trading.eval.eval

@@ -1,0 +1,30 @@
+id: 030-ltc-feb-range
+description: 'Range Bound Chop for LTC/USDT at 2026-02-17T04:00:00+00:00. Derived
+  labels: bias=neutral, volume=weak, confluence=0.25, trader_action=flat. RSI=52.3
+  (neutral), MACD_hist=-0.0245 (bearish_momentum_expanding), OBV=neutral, ADX=15.4
+  (weak_trend).'
+symbol: LTC/USDT
+timestamp: 2026-02-17 04:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 55.0
+  nearest_resistance: 53.81
+  confluence_score: 0.25
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

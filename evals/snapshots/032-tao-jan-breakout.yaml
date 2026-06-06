@@ -1,0 +1,30 @@
+id: 032-tao-jan-breakout
+description: 'Bullish Breakout At Resistance for TAO/USDT at 2026-01-27T00:00:00+00:00.
+  Derived labels: bias=neutral, volume=weak, confluence=0.25, trader_action=flat.
+  RSI=44.6 (neutral), MACD_hist=0.7642 (bullish_momentum_expanding), OBV=neutral,
+  ADX=34.5 (strong_trend).'
+symbol: TAO/USDT
+timestamp: 2026-01-27 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 235.1
+  nearest_resistance: 232.8
+  confluence_score: 0.25
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal

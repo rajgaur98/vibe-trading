@@ -1,0 +1,29 @@
+id: 025-tao-mar-transitional
+description: 'Transitional for TAO/USDT at 2026-03-18T00:00:00+00:00. Derived labels:
+  bias=neutral, volume=weak, confluence=0.25, trader_action=flat. RSI=60.4 (approaching_overbought),
+  MACD_hist=-2.7471 (bearish_momentum_expanding), OBV=neutral, ADX=56.5 (strong_trend).'
+symbol: TAO/USDT
+timestamp: 2026-03-18 00:00:00+00:00
+analyst_label:
+  market_bias: neutral
+  volume_confirmation: weak
+  nearest_support: 270.0
+  nearest_resistance: 300.7
+  confluence_score: 0.25
+  thesis_rubric:
+    must_mention:
+    - lack of directional edge
+    - mixed indicator signals
+    must_not_mention:
+    - high-conviction directional call
+trader_label:
+  action: flat
+  stop_loss_strategy: 1.5_atr
+  take_profit_strategy: risk_reward_multiplier
+  risk_reward_ratio: 1.5
+  hold_period_bias: medium
+  reasoning_rubric:
+    must_mention:
+    - lack of clear edge
+    must_not_mention:
+    - enter despite weak signal
