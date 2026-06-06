@@ -6,7 +6,7 @@ from uuid import uuid4
 from datetime import datetime, timezone
 from decimal import Decimal
 from langfuse import observe, propagate_attributes
-from vibe_trading.agents.client import LLMClient
+from vibe_trading.agents.client import LLMClient, validate_structured
 from vibe_trading.agents.analyst import AnalystOutput
 
 
@@ -121,26 +121,35 @@ Provide your output strictly matching the Pydantic JSON schema.
 - Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
 - Always output a valid schema.
 """
-            raw_output = self.client.call_llm(
-                model_name=self.model,
-                system_instruction=self.system_instruction,
-                prompt=prompt,
-                response_schema=HeadTraderOutput
+            def _call_single(extra: str = "") -> str:
+                return self.client.call_llm(
+                    model_name=self.model,
+                    system_instruction=self.system_instruction,
+                    prompt=prompt + extra,
+                    response_schema=HeadTraderOutput,
+                )
+
+            raw_output = _call_single()
+
+            # Validate into HeadTraderOutput with ONE corrective retry; records the
+            # schema-compliance outcome onto the cost event. Raises SchemaValidationError
+            # (never a bare KeyError) if both attempts fail. Read fields off the
+            # validated model rather than building a dict by key.
+            decision = validate_structured(
+                self.client, HeadTraderOutput, raw_output, _call_single
             )
-            
-            data = json.loads(raw_output)
-            
-            # Hydrate the final proposal dictionary with system fields (UUID, timestamp)
+
+            # Hydrate the final proposal dictionary with system fields (UUID, timestamp).
             proposal = {
                 "decision_id": str(uuid4()),
                 "timestamp": datetime.now(timezone.utc),
                 "symbol": symbol,
-                "action": data["action"],
-                "stop_loss_strategy": data["stop_loss_strategy"],
-                "take_profit_strategy": data["take_profit_strategy"],
-                "risk_reward_ratio": Decimal(str(data["risk_reward_ratio"])),
-                "hold_period_bias": data["hold_period_bias"],
-                "reasoning_summary": data["reasoning_summary"]
+                "action": decision.action,
+                "stop_loss_strategy": decision.stop_loss_strategy,
+                "take_profit_strategy": decision.take_profit_strategy,
+                "risk_reward_ratio": Decimal(str(decision.risk_reward_ratio)),
+                "hold_period_bias": decision.hold_period_bias,
+                "reasoning_summary": decision.reasoning_summary,
             }
-            
+
             return proposal

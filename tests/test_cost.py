@@ -75,8 +75,10 @@ class _FakeCursor:
 
 
 def test_daily_summary_aggregates_and_projects():
+    # scalar_row columns (positional):
+    # cost_usd, calls, total_tokens, prompt_tokens, cache_read_tokens, schema_ok_true, schema_ok_total
     conn = _FakeCursor(
-        scalar_row=(0.0123, 47, 91234),
+        scalar_row=(0.0123, 47, 91234, 80000, 0, 47, 47),
         model_rows=[("gemini/gemma-4-31b-it", 47, 0.0123)],
     )
     s = daily_summary(conn)
@@ -89,7 +91,7 @@ def test_daily_summary_aggregates_and_projects():
 
 
 def test_daily_summary_empty_returns_zeros():
-    conn = _FakeCursor(scalar_row=(None, 0, None), model_rows=[])
+    conn = _FakeCursor(scalar_row=(None, 0, None, None, None, 0, 0), model_rows=[])
     s = daily_summary(conn)
     assert s["today_usd"] == 0.0
     assert s["calls"] == 0
@@ -97,6 +99,50 @@ def test_daily_summary_empty_returns_zeros():
     assert s["avg_cost_per_call"] == 0.0
     assert s["projected_monthly_usd"] == 0.0
     assert s["by_model"] == []
+    # No schema-evaluated calls -> compliance rate defaults to 1.0; no prompt tokens -> cache rate 0.0
+    assert s["schema_compliance_rate"] == 1.0
+    assert s["cache_hit_rate"] == 0.0
+
+
+def test_daily_summary_schema_compliance_rate():
+    """compliance = schema_ok_true / schema_ok_total (rows where schema_ok IS NOT NULL)."""
+    # 8 of 10 schema-evaluated calls were compliant.
+    conn = _FakeCursor(
+        scalar_row=(0.05, 12, 50000, 40000, 0, 8, 10),
+        model_rows=[],
+    )
+    s = daily_summary(conn)
+    assert abs(s["schema_compliance_rate"] - 0.8) < 1e-9
+
+
+def test_daily_summary_schema_compliance_rate_one_when_no_evaluated_calls():
+    """Denominator 0 (no schema_ok values) -> 1.0 (don't penalize unstructured-only days)."""
+    conn = _FakeCursor(
+        scalar_row=(0.05, 12, 50000, 40000, 0, 0, 0),
+        model_rows=[],
+    )
+    s = daily_summary(conn)
+    assert s["schema_compliance_rate"] == 1.0
+
+
+def test_daily_summary_cache_hit_rate():
+    """cache_hit_rate = sum(cache_read_tokens) / sum(prompt_tokens)."""
+    conn = _FakeCursor(
+        scalar_row=(0.05, 12, 50000, 40000, 10000, 12, 12),
+        model_rows=[],
+    )
+    s = daily_summary(conn)
+    assert abs(s["cache_hit_rate"] - (10000 / 40000)) < 1e-9
+
+
+def test_daily_summary_cache_hit_rate_zero_when_no_prompt_tokens():
+    """No prompt tokens -> cache_hit_rate 0.0 (avoids div-by-zero); plumbing still correct."""
+    conn = _FakeCursor(
+        scalar_row=(0.0, 0, 0, 0, 0, 0, 0),
+        model_rows=[],
+    )
+    s = daily_summary(conn)
+    assert s["cache_hit_rate"] == 0.0
 
 
 def test_postgres_cost_logger_record_is_best_effort():

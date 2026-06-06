@@ -5,7 +5,7 @@ import json
 import os
 import re
 from langfuse import observe, propagate_attributes
-from vibe_trading.agents.client import LLMClient
+from vibe_trading.agents.client import LLMClient, validate_structured
 from vibe_trading.agents.tools import ANALYST_TOOLS, ToolExecutor
 from vibe_trading.data.db import Database
 from vibe_trading.data.fetcher import DataFetcher
@@ -138,13 +138,19 @@ matches this schema (no extra text, no tool_calls):
                     f"candlestick patterns, derivatives, and market sentiment, then "
                     f"produce the final JSON analysis."
                 )
-                raw_output = self.client.call_llm_with_tools(
-                    model_name=self.model,
-                    system_instruction=self.system_instruction,
-                    prompt=prompt,
-                    tools=ANALYST_TOOLS,
-                    tool_executor=self.tool_executor,
-                )
+
+                def _call_tool_loop(extra: str = "") -> str:
+                    return self.client.call_llm_with_tools(
+                        model_name=self.model,
+                        system_instruction=self.system_instruction,
+                        prompt=prompt + extra,
+                        tools=ANALYST_TOOLS,
+                        tool_executor=self.tool_executor,
+                        expect_schema=True,
+                    )
+
+                raw_output = _call_tool_loop()
+                recall = _call_tool_loop
             else:
                 prompt = (
                     f"Analyze the following Market Snapshot for {symbol}:\n"
@@ -152,12 +158,21 @@ matches this schema (no extra text, no tool_calls):
                     f"Evaluate all parameters, check for price-volume confirmation or "
                     f"divergence, and output the analysis."
                 )
-                raw_output = self.client.call_llm(
-                    model_name=self.model,
-                    system_instruction=self.system_instruction,
-                    prompt=prompt,
-                    response_schema=AnalystOutput,
-                )
 
-            data = json.loads(_extract_json(raw_output))
-            return AnalystOutput(**data)
+                def _call_single(extra: str = "") -> str:
+                    return self.client.call_llm(
+                        model_name=self.model,
+                        system_instruction=self.system_instruction,
+                        prompt=prompt + extra,
+                        response_schema=AnalystOutput,
+                    )
+
+                raw_output = _call_single()
+                recall = _call_single
+
+            # Validate into AnalystOutput with ONE corrective retry; records the
+            # schema-compliance outcome onto the cost event. Raises SchemaValidationError
+            # (never a bare KeyError/ValidationError) if both attempts fail.
+            return validate_structured(
+                self.client, AnalystOutput, raw_output, recall, extract=_extract_json
+            )
