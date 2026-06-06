@@ -185,17 +185,24 @@ docker compose up -d vibe-bot
 
 ---
 
-## Live Testnet Execution (Binance USDⓂ Futures)
+## Live Demo Execution (Binance USDⓂ Futures Demo Trading)
 
-Set `TRADING_MODE=LIVE_TESTNET` to execute real orders on the **Binance USDⓂ Futures
-testnet** (`testnet.binancefuture.com`) with native exchange brackets. On entry the broker
-places a market order plus two reduce-only `closePosition` orders — `TAKE_PROFIT_MARKET`
-and `STOP_MARKET` — so the exchange fills whichever triggers first and cancels the sibling,
-**even if the bot is offline**. Leverage is pinned to 1× so risk/sizing semantics match the
-paper model. Futures (not spot) is used because the trader emits **short** as well as long.
+Set `TRADING_MODE=LIVE_TESTNET` to execute real orders on **Binance Futures Demo Trading**
+(`demo.binance.com` → REST `demo-fapi.binance.com`) with native exchange brackets. On entry
+the broker places a market order plus two `closePosition` orders — `TAKE_PROFIT_MARKET` and
+`STOP_MARKET` — so the exchange fills whichever triggers first and cancels the sibling,
+**even if the bot is offline** (verified live). Leverage is pinned to 1× so risk/sizing
+semantics match the paper model. Futures (not spot) is used because the trader emits
+**short** as well as long.
 
-- **Setup:** create testnet API keys, put them in `BINANCE_TESTNET_API_KEY` /
-  `BINANCE_TESTNET_API_SECRET`, and set `TRADING_MODE=LIVE_TESTNET`.
+> Demo Trading is **not** the deprecated futures testnet (`testnet.binancefuture.com`) and
+> not production. ccxt 4.5 dropped `set_sandbox_mode` for futures, so the broker routes the
+> fapi URLs to `demo-fapi.binance.com` directly (override via `BINANCE_DEMO_FAPI_URL`). The
+> demo TP/SL are **conditional orders** — read back with `fetch_open_orders(..., {'stop': True})`.
+
+- **Setup:** create demo-trading API keys at `demo.binance.com` (API Management; enable
+  Reading + Futures), put them in `BINANCE_TESTNET_API_KEY` / `BINANCE_TESTNET_API_SECRET`
+  (names kept for back-compat — they hold demo keys), and set `TRADING_MODE=LIVE_TESTNET`.
 - **Dry run:** `BINANCE_TESTNET_DRY_RUN=true` logs intended orders without placing any —
   a safe way to verify wiring before sending real testnet orders.
 - **Dashboard:** in this mode `/api/positions` reads open positions **directly from the

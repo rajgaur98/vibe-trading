@@ -6,6 +6,16 @@
 > produces working software on its own: real-time bracket *exits* on the exchange,
 > a live exchange-truth dashboard, and reconcile-based trade bookkeeping.
 
+> **Implementation update (verified live 2026-06-06).** The venue is **Binance Futures
+> Demo Trading** (`demo.binance.com` → `demo-fapi.binance.com`), not the deprecated futures
+> testnet. ccxt 4.5 removed `set_sandbox_mode` for futures, so the broker routes the fapi
+> URLs to `demo-fapi.binance.com` directly. Three behaviours discovered in live testing and
+> handled in code: (1) `load_markets` is scoped to futures + `fetchCurrencies=False` to avoid
+> SPOT/margin SAPI auth; (2) `closePosition` brackets are rejected right after entry until the
+> fill registers, so we poll for the position before attaching them, and roll the entry back
+> if they fail; (3) the brackets are **conditional orders** read back via
+> `fetch_open_orders(..., {'stop': True})`. The OCO bracket *mechanics* below are unchanged.
+
 ## Problem
 
 Today the bot only "executes" via `PaperBroker` (a simulation) or a stub `CoinbaseBroker`.

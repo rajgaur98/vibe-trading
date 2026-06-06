@@ -1,8 +1,8 @@
-"""Manual live smoke test for BinanceFuturesBroker against the Binance futures testnet.
+"""Manual live smoke test for BinanceFuturesBroker against Binance Futures DEMO TRADING.
 
-NOT run by pytest. Requires BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET in your
-environment (or .env). Places a tiny BTC long with a bracket, prints the resulting position
-and open orders, then closes it.
+NOT run by pytest. Requires BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET (demo-trading
+keys from demo.binance.com) in your environment (or .env). Places a tiny BTC long with native
+TP/SL brackets, prints the resulting position + bracket prices, then closes it.
 
 Usage:
     python scripts/binance_testnet_smoke.py
@@ -19,7 +19,7 @@ load_dotenv()
 
 
 def main():
-    broker = BinanceFuturesBroker(db=None)  # real testnet via ccxt set_sandbox_mode
+    broker = BinanceFuturesBroker(db=None)  # routes to demo-fapi.binance.com
 
     symbol = "BTC/USDT"
     mark = broker.get_mark_price(symbol)
