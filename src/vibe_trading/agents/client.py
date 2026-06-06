@@ -6,6 +6,8 @@ import logging
 import litellm
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
+from vibe_trading.agents.cost import CostEvent
+
 logger = logging.getLogger(__name__)
 
 litellm.telemetry = False
@@ -47,6 +49,29 @@ class LLMClient:
     # quota, so the minimum-interval spacing must be global, not per-instance.
     _last_call_at: float = 0.0
     _throttle_lock = threading.Lock()
+    _cost_sink = None  # set once at app startup; None => no-op (tests/eval)
+
+    @classmethod
+    def set_cost_sink(cls, sink) -> None:
+        """Install (or clear with None) the process-wide cost sink. Mirrors the
+        class-level throttle: production sets a PostgresCostLogger; tests/eval leave None."""
+        cls._cost_sink = sink
+
+    def _emit_cost(self, response, model_str: str, call_type: str, latency_ms: float) -> None:
+        """Best-effort cost emit. Never raises — cost logging must not break an LLM call."""
+        sink = LLMClient._cost_sink
+        if sink is None:
+            return
+        try:
+            usage = getattr(response, "usage", None)
+            pt = int(getattr(usage, "prompt_tokens", 0) or 0)
+            ct = int(getattr(usage, "completion_tokens", 0) or 0)
+            sink.record(CostEvent.build(
+                provider=self.provider, model=model_str, call_type=call_type,
+                prompt_tokens=pt, completion_tokens=ct, latency_ms=latency_ms,
+            ))
+        except Exception as e:
+            logger.warning(f"cost emit failed (non-fatal): {e}")
 
     def __init__(self):
         self.provider = os.getenv("LLM_PROVIDER", "gemini").lower()
@@ -114,7 +139,9 @@ class LLMClient:
         if response_schema:
             kwargs["response_format"] = response_schema
             
+        _t0 = time.monotonic()
         response = litellm.completion(**kwargs)
+        self._emit_cost(response, model_str, "single", (time.monotonic() - _t0) * 1000.0)
         return response.choices[0].message.content
 
     def call_llm_with_tools(
@@ -140,6 +167,7 @@ class LLMClient:
         for iteration in range(max_iterations):
             logger.info(f"Tool-use loop iteration {iteration + 1}/{max_iterations} (model={model_str})")
             self._throttle()
+            _t0 = time.monotonic()
             response = litellm.completion(
                 model=model_str,
                 messages=messages,
@@ -147,6 +175,7 @@ class LLMClient:
                 tool_choice="auto",
                 temperature=0.1,
             )
+            self._emit_cost(response, model_str, "tool_loop", (time.monotonic() - _t0) * 1000.0)
             assistant_msg = response.choices[0].message
             if hasattr(assistant_msg, "model_dump"):
                 messages.append(assistant_msg.model_dump())

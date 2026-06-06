@@ -812,3 +812,85 @@ def test_call_llm_with_tools_malformed_args(mock_completion):
     parsed = json.loads(tool_msgs[0]["content"])
     assert "error" in parsed
     assert "Malformed tool arguments" in parsed["error"]
+
+
+from vibe_trading.agents.cost import CostEvent
+
+
+class _CollectSink:
+    def __init__(self):
+        self.events = []
+    def record(self, event):
+        self.events.append(event)
+
+
+def _mock_completion_with_usage(content='{"ok": 1}', pt=120, ct=45):
+    resp = MagicMock()
+    resp.choices = [MagicMock()]
+    resp.choices[0].message.content = content
+    resp.choices[0].message.tool_calls = None
+    resp.usage = MagicMock(prompt_tokens=pt, completion_tokens=ct)
+    return resp
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k"}, clear=True)
+def test_call_llm_emits_cost_event_when_sink_set(mock_completion):
+    mock_completion.return_value = _mock_completion_with_usage(pt=120, ct=45)
+    sink = _CollectSink()
+    LLMClient.set_cost_sink(sink)
+    try:
+        LLMClient().call_llm("gemma-4-31b-it", "sys", "usr")
+    finally:
+        LLMClient.set_cost_sink(None)
+    assert len(sink.events) == 1
+    ev = sink.events[0]
+    assert isinstance(ev, CostEvent)
+    assert ev.call_type == "single"
+    assert ev.prompt_tokens == 120 and ev.completion_tokens == 45
+    assert ev.provider == "gemini"
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k"}, clear=True)
+def test_call_llm_no_sink_is_noop(mock_completion):
+    mock_completion.return_value = _mock_completion_with_usage()
+    LLMClient.set_cost_sink(None)  # explicit default
+    out = LLMClient().call_llm("gemma-4-31b-it", "sys", "usr")
+    assert out == '{"ok": 1}'
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k"}, clear=True)
+def test_cost_sink_failure_does_not_break_call(mock_completion):
+    mock_completion.return_value = _mock_completion_with_usage(content='{"ok": 2}')
+    class _BoomSink:
+        def record(self, event):
+            raise RuntimeError("sink down")
+    LLMClient.set_cost_sink(_BoomSink())
+    try:
+        out = LLMClient().call_llm("gemma-4-31b-it", "sys", "usr")
+    finally:
+        LLMClient.set_cost_sink(None)
+    assert out == '{"ok": 2}'
+
+
+@patch("litellm.completion")
+@patch.dict("os.environ", {"LLM_PROVIDER": "gemini", "GEMINI_API_KEY": "k"}, clear=True)
+def test_tool_loop_emits_cost_event_per_iteration(mock_completion):
+    msg1 = MagicMock()
+    tc = MagicMock(); tc.id = "c1"; tc.function.name = "get_market_sentiment"; tc.function.arguments = "{}"
+    msg1.tool_calls = [tc]
+    msg2 = MagicMock(); msg2.tool_calls = None; msg2.content = '{"done": 1}'
+    r1 = MagicMock(); r1.choices = [MagicMock(message=msg1)]; r1.usage = MagicMock(prompt_tokens=100, completion_tokens=10)
+    r2 = MagicMock(); r2.choices = [MagicMock(message=msg2)]; r2.usage = MagicMock(prompt_tokens=130, completion_tokens=20)
+    mock_completion.side_effect = [r1, r2]
+    sink = _CollectSink()
+    LLMClient.set_cost_sink(sink)
+    tool_exec = MagicMock(); tool_exec.execute.return_value = "{}"
+    try:
+        LLMClient().call_llm_with_tools("gemma-4-31b-it", "sys", "usr", tools=[], tool_executor=tool_exec)
+    finally:
+        LLMClient.set_cost_sink(None)
+    assert len(sink.events) == 2
+    assert all(e.call_type == "tool_loop" for e in sink.events)
