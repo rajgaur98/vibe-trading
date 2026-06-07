@@ -33,14 +33,15 @@ export default function EquityChart({ metrics }: { metrics: MetricsData | null }
 
     const curve = metrics.equity_curve;
     
-    // If only one point exists (e.g. startup), add a mock starting point so we can render a line
+    // If only one point exists (e.g. startup), add a leading point at the SAME balance so
+    // we can render a (flat) line — never a fabricated $10k starting value.
     const chartPoints = [...curve];
     if (chartPoints.length === 1) {
       const firstPointDate = new Date(chartPoints[0].timestamp);
       const startDateTime = new Date(firstPointDate.getTime() - 24 * 60 * 60 * 1000); // 1 day before
       chartPoints.unshift({
         timestamp: startDateTime.toISOString(),
-        balance: 10000.0,
+        balance: chartPoints[0].balance,
       });
     }
 

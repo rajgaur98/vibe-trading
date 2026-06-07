@@ -36,6 +36,14 @@ export default function Navigation() {
     { href: "/trades", label: "Trade History", icon: History },
   ];
 
+  // Friendly labels for the raw TRADING_MODE enum (LIVE_TESTNET = Binance Futures demo).
+  const MODE_LABELS: Record<string, string> = {
+    LIVE_TESTNET: "DEMO TRADING",
+    LIVE_SANDBOX: "LIVE SANDBOX",
+    PAPER: "PAPER MODE",
+  };
+  const modeLabel = status?.mode ? MODE_LABELS[status.mode] ?? `${status.mode} MODE` : "Offline";
+
   return (
     <aside className="w-64 border-r border-emerald-950/20 bg-slate-950/40 backdrop-blur-md flex flex-col justify-between p-6">
       <div className="space-y-8">
@@ -85,7 +93,7 @@ export default function Navigation() {
             <div>
               <p className="text-xs font-semibold text-slate-300">System Status</p>
               <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
-                {loading ? "Checking..." : status?.mode ? `${status.mode} MODE` : "Offline"}
+                {loading ? "Checking..." : modeLabel}
               </p>
             </div>
           </div>

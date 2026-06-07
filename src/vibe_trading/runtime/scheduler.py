@@ -138,6 +138,11 @@ class TradingScheduler:
                 # Update positions (internally connects and closes DuckDB inside PaperBroker)
                 closed_trades = self.broker.update_positions(current_prices)
                 self._record_closed_trades(closed_trades)
+
+                # Snapshot live equity each tick (LIVE_TESTNET) so the dashboard's
+                # balance/equity/drawdown reflect the real demo account, not the stale
+                # paper portfolio_state. PaperBroker maintains portfolio_state itself.
+                self._snapshot_equity()
                 
                 # 3. Check for new entry signals — unless the hard LLM-spend cap is hit.
                 # Existing positions were already updated above and keep being managed;
@@ -256,6 +261,37 @@ class TradingScheduler:
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")
+
+    def _snapshot_equity(self):
+        """Record a portfolio_state point from the LIVE exchange balance (LIVE_TESTNET only).
+
+        The futures broker reads balance from the exchange and tracks peak in-memory; it does
+        NOT persist portfolio_state the way PaperBroker does. Without this, the dashboard's
+        balance / equity curve / drawdown stay frozen at the seeded value. Runs once per tick
+        on its own pooled connection; never raises (a snapshot failure must not break a tick)."""
+        if os.getenv("TRADING_MODE", "PAPER").upper() != "LIVE_TESTNET":
+            return
+        try:
+            balance = float(self.broker.get_balance())
+        except Exception as e:
+            logger.warning(f"equity snapshot skipped (balance read failed): {e}")
+            return
+        pg = PostgresDatabase()
+        pg.connect()
+        try:
+            row = pg.conn.execute(
+                "SELECT peak_balance FROM portfolio_state ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            prev_peak = float(row[0]) if row and row[0] is not None else balance
+            peak = max(prev_peak, balance)
+            pg.conn.execute(
+                "INSERT INTO portfolio_state (timestamp, balance, peak_balance) VALUES (?, ?, ?)",
+                (datetime.utcnow(), balance, peak),
+            )
+        except Exception as e:
+            logger.warning(f"equity snapshot persist failed (non-fatal): {e}")
+        finally:
+            pg.close()
 
     def _maybe_start_ws_listener(self):
         """Start the User Data Stream websocket listener for real-time fill bookkeeping

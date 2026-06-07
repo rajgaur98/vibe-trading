@@ -193,3 +193,38 @@ def test_check_cost_alarm_fires_once_per_day(monkeypatch):
     sched._check_cost_alarm()
     sched._check_cost_alarm()  # same day → must not re-alarm
     assert sum("COST ALARM" in a for a in alerts) == 1
+
+
+# --- live equity snapshot (LIVE_TESTNET dashboard balance/equity/drawdown) ---
+
+def test_snapshot_equity_persists_live_balance(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "LIVE_TESTNET")
+    sched = _scheduler_without_init()
+    sched.broker = MagicMock()
+    sched.broker.get_balance.return_value = 9500.0
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.fetchone.return_value = (10000.0,)  # prior peak
+    fake_pg = MagicMock()
+    fake_pg.conn = fake_conn
+    monkeypatch.setattr("vibe_trading.runtime.scheduler.PostgresDatabase", lambda *a, **k: fake_pg)
+
+    sched._snapshot_equity()
+
+    insert = fake_conn.execute.call_args  # last call = the INSERT
+    sql, params = insert.args[0], insert.args[1]
+    assert "INSERT INTO portfolio_state" in sql
+    assert 9500.0 in params           # live balance persisted
+    assert 10000.0 in params          # peak = max(prior 10000, 9500)
+    assert fake_pg.connect.called and fake_pg.close.called
+
+
+def test_snapshot_equity_noop_when_not_testnet(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "PAPER")
+    sched = _scheduler_without_init()
+    sched.broker = MagicMock()
+    factory = MagicMock()
+    monkeypatch.setattr("vibe_trading.runtime.scheduler.PostgresDatabase", factory)
+
+    sched._snapshot_equity()
+    assert factory.call_count == 0                 # no connection opened in PAPER
+    sched.broker.get_balance.assert_not_called()

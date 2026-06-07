@@ -196,7 +196,7 @@ export default function PositionsList({
         <div className="text-[10px] text-slate-600 bg-slate-950/40 border border-slate-900 p-2.5 rounded-md flex items-start gap-2">
           <PlayCircle className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
           <span>
-            Paper account simulates dynamic market checks against order stop loss and take profit values every 4 hours.
+            Stop-loss and take-profit are placed as native exchange bracket orders — the exchange fills whichever triggers first, in real time, and the close is recorded via the live order stream.
           </span>
         </div>
       </div>
