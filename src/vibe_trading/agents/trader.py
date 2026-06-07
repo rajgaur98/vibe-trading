@@ -89,6 +89,7 @@ Provide your output strictly matching the Pydantic JSON schema.
         scorecard: dict,
         open_positions: list,
         current_price: float = 0.0,
+        precedents=None,
     ) -> dict:
         """Invokes the Head Trader agent to make a trade decision.
 
@@ -101,6 +102,18 @@ Provide your output strictly matching the Pydantic JSON schema.
             tags=[symbol],
             metadata={"symbol": symbol}
         ):
+            precedent_block = ""
+            if precedents:
+                lines = "\n".join(
+                    f"- {p.symbol} {p.action.upper()} ({p.when}, similarity {p.similarity:.2f}): {p.outcome_label}"
+                    for p in precedents
+                )
+                precedent_block = (
+                    "\n--- PRECEDENTS — similar past setups you took and how they resolved ---\n"
+                    f"{lines}\n"
+                    "Weigh these against the current setup; repeated losses on a similar setup are a reason for caution.\n"
+                )
+
             prompt = f"""Make a trading decision for {symbol}.
 
 --- Current Market Price ---
@@ -114,7 +127,7 @@ Provide your output strictly matching the Pydantic JSON schema.
 
 --- Current Open Positions ---
 {json.dumps(open_positions, indent=2, default=str)}
-
+{precedent_block}
 --- Rules ---
 - Apply the House Methodology for stop-loss, take-profit, risk/reward, and hold-period selection.
 - Judge S/R proximity against the Current Market Price above (a level is "near" within 2%).
