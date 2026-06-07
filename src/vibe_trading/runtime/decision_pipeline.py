@@ -12,6 +12,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from vibe_trading.journal import build_setup_card, NoOpRetriever
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,17 +35,23 @@ class DecisionResult:
     proposal: Optional[dict] = None
     trace_id: Optional[str] = None
     risk_result: Optional[dict] = None
+    setup_text: Optional[str] = None
+    setup_embedding: Optional[list] = None
 
 
 class DecisionPipeline:
     def __init__(self, analyst, trader, risk_manager, feature_pipeline, broker,
-                 scorecard: dict, trace_id_fn: Optional[Callable[[], Optional[str]]] = None):
+                 scorecard: dict, trace_id_fn: Optional[Callable[[], Optional[str]]] = None,
+                 retriever=None):
         self.analyst = analyst
         self.trader = trader
         self.risk_manager = risk_manager
         self.feature_pipeline = feature_pipeline
         self.broker = broker
         self.scorecard = scorecard
+        # Journal RAG retriever (precedents for the trader). NoOp by default so the eval
+        # and PAPER paths are unchanged unless a real retriever is injected.
+        self.retriever = retriever or NoOpRetriever()
         # Captures the current observability trace id at decision time (None if unavailable).
         self._trace_id_fn = trace_id_fn or (lambda: None)
 
@@ -62,16 +70,20 @@ class DecisionPipeline:
         if not snapshot:
             return DecisionResult(symbol, "no_snapshot", analyst_report=analyst_report)
 
-        # Stage 3 — Head Trader decision.
+        # Stage 3 — Retrieve precedents (similar past setups + outcomes), then Head Trader.
         open_positions = self.broker.get_open_positions()
+        setup_text = build_setup_card(analyst_report, snapshot)
+        retrieval = self.retriever.retrieve_for(setup_text)
         proposal = self.trader.decide(
-            symbol, analyst_report, self.scorecard, open_positions, current_price=exec_price
+            symbol, analyst_report, self.scorecard, open_positions,
+            current_price=exec_price, precedents=retrieval.precedents,
         )
         trace_id = self._trace_id_fn()
 
         if proposal["action"] == "flat":
             return DecisionResult(symbol, "flat", analyst_report=analyst_report,
-                                  snapshot=snapshot, proposal=proposal, trace_id=trace_id)
+                                  snapshot=snapshot, proposal=proposal, trace_id=trace_id,
+                                  setup_text=setup_text, setup_embedding=retrieval.embedding)
 
         # Stage 4 — Risk Manager (deterministic sizing / veto). Balance is fetched here
         # (only for non-flat proposals) to preserve the original lazy-fetch behavior.
@@ -87,4 +99,5 @@ class DecisionPipeline:
         )
         status = "approved" if risk_result["approved"] else "rejected"
         return DecisionResult(symbol, status, analyst_report=analyst_report, snapshot=snapshot,
-                              proposal=proposal, trace_id=trace_id, risk_result=risk_result)
+                              proposal=proposal, trace_id=trace_id, risk_result=risk_result,
+                              setup_text=setup_text, setup_embedding=retrieval.embedding)

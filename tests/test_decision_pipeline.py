@@ -62,6 +62,30 @@ def test_approved_runs_risk_with_exec_price_and_broker_state():
     assert trader.decide.call_args.kwargs["current_price"] == 250.0
 
 
+def test_pipeline_retrieves_and_threads_precedents():
+    from vibe_trading.journal import RetrievalResult
+    p, analyst, trader, risk, fp, broker = _pipeline()
+    trader.decide.return_value = {"action": "flat", "decision_id": "d1"}
+    retriever = MagicMock()
+    retriever.retrieve_for.return_value = RetrievalResult([0.1, 0.2], ["PRECEDENT_OBJ"])
+    p.retriever = retriever
+
+    res = p.run_symbol("BTC/USDT", "ts", 100.0)
+
+    assert isinstance(retriever.retrieve_for.call_args.args[0], str)   # setup card text
+    assert trader.decide.call_args.kwargs["precedents"] == ["PRECEDENT_OBJ"]
+    assert res.setup_embedding == [0.1, 0.2]
+    assert isinstance(res.setup_text, str)
+
+
+def test_pipeline_defaults_to_noop_retriever():
+    p, analyst, trader, risk, fp, broker = _pipeline()
+    trader.decide.return_value = {"action": "flat", "decision_id": "d1"}
+    res = p.run_symbol("BTC/USDT", "ts", 100.0)
+    assert trader.decide.call_args.kwargs["precedents"] == []
+    assert res.setup_embedding is None
+
+
 def test_rejected_status():
     p, analyst, trader, risk, fp, broker = _pipeline()
     trader.decide.return_value = {"action": "short", "decision_id": "d3"}
