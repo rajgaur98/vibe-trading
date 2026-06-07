@@ -9,6 +9,7 @@ best-effort.
 Run: uv run python scripts/reset_account.py
 """
 
+import os
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,21 @@ from vibe_trading.data.db import Database, PostgresDatabase
 
 ACCOUNT_TABLES = ["open_positions", "trades", "decision_log", "portfolio_state"]
 STARTING_BALANCE = 10000.0
+
+
+def _seed_balance() -> float:
+    """The portfolio_state seed. In LIVE_TESTNET the account is the real Binance demo
+    futures account — seed its ACTUAL balance so the dashboard's balance/peak/drawdown
+    reflect reality, not a fictitious paper $10k. Falls back to STARTING_BALANCE."""
+    if os.getenv("TRADING_MODE", "PAPER").upper() == "LIVE_TESTNET":
+        try:
+            from vibe_trading.brokers.binance_futures import BinanceFuturesBroker
+            bal = float(BinanceFuturesBroker(db=None).get_balance())
+            print(f"LIVE_TESTNET: seeding portfolio_state from real demo balance ${bal:,.2f}")
+            return bal
+        except Exception as e:
+            print(f"  (could not read live demo balance; seeding ${STARTING_BALANCE:,.2f}: {e})")
+    return STARTING_BALANCE
 
 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 backup_dir = Path("data/backups")
@@ -45,9 +61,11 @@ try:
     for tbl in ACCOUNT_TABLES:
         pg.conn.execute(f"DELETE FROM {tbl}")
     # Seed a fresh starting balance so the dashboard reflects the reset immediately.
+    # In LIVE_TESTNET this is the real demo balance (peak = balance), not a paper $10k.
+    seed_balance = _seed_balance()
     pg.conn.execute(
         "INSERT INTO portfolio_state (timestamp, balance, peak_balance) VALUES (CURRENT_TIMESTAMP, %s, %s)",
-        (STARTING_BALANCE, STARTING_BALANCE),
+        (seed_balance, seed_balance),
     )
     pg.conn.commit()
 
@@ -74,4 +92,4 @@ except Exception as e:
 finally:
     duck.close()
 
-print(f"\nDone. Account reset to ${STARTING_BALANCE:,.2f}. Backup at {backup_path}")
+print(f"\nDone. Account reset to ${seed_balance:,.2f}. Backup at {backup_path}")
