@@ -369,6 +369,17 @@ class PostgresDatabase:
                     schema_ok BOOLEAN
                 )
             """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS decision_embeddings (
+                    decision_id VARCHAR PRIMARY KEY,
+                    symbol VARCHAR,
+                    timestamp TIMESTAMP,
+                    action VARCHAR,
+                    entry_price DOUBLE PRECISION,
+                    setup_text TEXT,
+                    embedding DOUBLE PRECISION[]
+                )
+            """)
             # Idempotent column migrations for pre-existing Supabase tables.
             for stmt in (
                 "ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_id VARCHAR",

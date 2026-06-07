@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+import litellm
+
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
@@ -63,6 +65,35 @@ def cosine_topk(query, candidates, k):
         scored.append((key, float(q.dot(v) / (qn * vn))))
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[:k]
+
+
+def embed(text: str, model: str = None) -> Optional[list]:
+    """Embed `text` via LiteLLM (Gemini by default). Returns the vector, or None on any
+    error (rate limit, network, bad model) — retrieval then degrades to no precedents."""
+    try:
+        resp = litellm.embedding(model=model or EMBEDDING_MODEL, input=[text])
+        return list(resp.data[0]["embedding"])
+    except Exception as e:
+        logger.warning(f"journal embed failed (non-fatal): {e}")
+        return None
+
+
+def persist_embedding(conn, decision_id, symbol, timestamp, action, entry_price,
+                      setup_text, embedding) -> None:
+    """Append this decision's setup embedding to decision_embeddings, keyed by decision_id,
+    so it becomes a future precedent once its outcome lands. `conn` is a connected DB
+    wrapper (caller owns connect/close). No-op when embedding is None; never raises."""
+    if embedding is None:
+        return
+    try:
+        conn.execute(
+            "INSERT INTO decision_embeddings "
+            "(decision_id, symbol, timestamp, action, entry_price, setup_text, embedding) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (decision_id, symbol, timestamp, action, entry_price, setup_text, embedding),
+        )
+    except Exception as e:
+        logger.error(f"journal persist_embedding failed (non-fatal): {e}")
 
 
 class NoOpRetriever:

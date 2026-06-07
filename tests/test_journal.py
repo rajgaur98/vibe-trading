@@ -51,3 +51,35 @@ def test_noop_retriever_returns_empty():
     r = NoOpRetriever().retrieve_for("any setup")
     assert isinstance(r, RetrievalResult)
     assert r.embedding is None and r.precedents == []
+
+
+from unittest.mock import MagicMock, patch
+from vibe_trading.journal import embed, persist_embedding
+
+
+def test_embed_returns_vector():
+    fake = MagicMock()
+    fake.data = [{"embedding": [0.1, 0.2, 0.3]}]
+    with patch("vibe_trading.journal.litellm.embedding", return_value=fake) as emb:
+        out = embed("setup card text")
+    assert out == [0.1, 0.2, 0.3]
+    assert emb.call_args.kwargs["model"] == "gemini/gemini-embedding-001"
+
+
+def test_embed_returns_none_on_error():
+    with patch("vibe_trading.journal.litellm.embedding", side_effect=Exception("rate limited")):
+        assert embed("x") is None
+
+
+def test_persist_embedding_inserts():
+    conn = MagicMock()
+    persist_embedding(conn, "d1", "BTC/USDT", "2026-06-01", "long", 100.0, "card", [0.1, 0.2])
+    sql, params = conn.execute.call_args.args
+    assert "INSERT INTO decision_embeddings" in sql
+    assert params[0] == "d1" and params[-1] == [0.1, 0.2]
+
+
+def test_persist_embedding_noop_on_none():
+    conn = MagicMock()
+    persist_embedding(conn, "d1", "BTC/USDT", "2026-06-01", "long", 100.0, "card", None)
+    conn.execute.assert_not_called()

@@ -78,3 +78,12 @@ def test_translate_query_handles_llm_cost_log_insert():
     assert "ON CONFLICT (call_id) DO NOTHING" in out
     assert "?" not in out  # placeholders translated to %s
     assert "%s" in out
+
+
+def test_decision_embeddings_table_in_schema():
+    import inspect
+    from vibe_trading.data.db import PostgresDatabase
+    src = inspect.getsource(PostgresDatabase._create_tables)
+    assert "decision_embeddings" in src
+    for col in ("decision_id", "symbol", "embedding"):
+        assert col in src
