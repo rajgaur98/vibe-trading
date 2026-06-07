@@ -89,11 +89,13 @@ export default function MetricsGrid({
                 </div>
               </div>
               <div>
-                <h3 className={`text-2xl font-bold tracking-tight text-slate-100 ${item.textColor || ""}`}>
+                {/* div (not h3/p): `value`/`desc` can be a <Skeleton> (a <div>) while loading,
+                    and a <div> nested in <p>/<h3> is invalid HTML -> React hydration error. */}
+                <div className={`text-2xl font-bold tracking-tight text-slate-100 ${item.textColor || ""}`}>
                   {item.value}
-                </h3>
+                </div>
                 {item.desc && (
-                  <p className="text-xs text-slate-500 mt-1 font-medium">{item.desc}</p>
+                  <div className="text-xs text-slate-500 mt-1 font-medium">{item.desc}</div>
                 )}
               </div>
             </CardContent>
