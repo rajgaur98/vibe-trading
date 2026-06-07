@@ -101,3 +101,65 @@ class NoOpRetriever:
     behaves exactly as before (no precedents, no embedding)."""
     def retrieve_for(self, setup_text: str) -> RetrievalResult:
         return RetrievalResult(None, [])
+
+
+class PrecedentRetriever:
+    """Semantic retrieval over the decision journal: embed the current setup, cosine-rank
+    past decisions (older than the counterfactual horizon, so their outcome is known),
+    take top-k, attach each outcome. All DB access is fail-soft."""
+
+    def __init__(self, k: int = PRECEDENT_K, horizon_candles: int = COUNTERFACTUAL_HORIZON_CANDLES,
+                 pg_factory=None, duck_factory=None, embed_fn=embed, now_fn=None):
+        self.k = k
+        self.horizon_candles = horizon_candles
+        self._embed = embed_fn
+        self._now = now_fn or (lambda: datetime.utcnow())
+        self._pg_factory = pg_factory
+        self._duck_factory = duck_factory
+
+    def _pg(self):
+        if self._pg_factory:
+            return self._pg_factory()
+        from vibe_trading.data.db import PostgresDatabase
+        return PostgresDatabase()
+
+    def _duck(self):
+        if self._duck_factory:
+            return self._duck_factory()
+        from vibe_trading.data.db import Database
+        return Database(read_only=True)
+
+    def retrieve_for(self, setup_text: str) -> RetrievalResult:
+        emb = self._embed(setup_text)
+        if emb is None:
+            return RetrievalResult(None, [])
+        try:
+            precedents = self.retrieve(emb)
+        except Exception as e:
+            logger.error(f"journal retrieve failed (non-fatal): {e}")
+            precedents = []
+        return RetrievalResult(emb, precedents)
+
+    def retrieve(self, embedding) -> list:
+        cutoff = self._now() - timedelta(hours=self.horizon_candles * _CANDLE_HOURS)
+        rows = self._load_candidates(cutoff)            # [(id, symbol, ts, action, entry, vector)]
+        ranked = cosine_topk(embedding, [(row, row[5]) for row in rows], self.k)
+        out = []
+        for row, score in ranked:
+            p = self._attach_outcome(row, score)
+            if p is not None:
+                out.append(p)
+        return out
+
+    def _load_candidates(self, cutoff):
+        pg = self._pg()
+        pg.connect()
+        try:
+            rows = pg.conn.execute(
+                "SELECT decision_id, symbol, timestamp, action, entry_price, embedding "
+                "FROM decision_embeddings WHERE timestamp < ?",
+                (cutoff,),
+            ).fetchall()
+            return [tuple(r) for r in rows]
+        finally:
+            pg.close()

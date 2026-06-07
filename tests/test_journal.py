@@ -83,3 +83,53 @@ def test_persist_embedding_noop_on_none():
     conn = MagicMock()
     persist_embedding(conn, "d1", "BTC/USDT", "2026-06-01", "long", 100.0, "card", None)
     conn.execute.assert_not_called()
+
+
+from datetime import datetime
+from vibe_trading.journal import PrecedentRetriever
+
+
+def _retriever_with_candidates(rows, attach=None):
+    r = PrecedentRetriever(k=2, horizon_candles=6, embed_fn=lambda t: [1.0, 0.0])
+    r._load_candidates = lambda cutoff: rows
+    if attach is not None:
+        r._attach_outcome = attach
+    return r
+
+
+def test_retrieve_ranks_and_limits_to_k():
+    rows = [
+        ("d1", "BTC/USDT", datetime(2026, 6, 1), "long", 100.0, [1.0, 0.0]),
+        ("d2", "ETH/USDT", datetime(2026, 6, 1), "short", 50.0, [0.0, 1.0]),
+        ("d3", "SOL/USDT", datetime(2026, 6, 1), "long", 20.0, [0.7, 0.7]),
+    ]
+    r = _retriever_with_candidates(
+        rows, attach=lambda row, score: Precedent(row[1], row[3], "x", score, "closed", 1.0, "ok")
+    )
+    out = r.retrieve([1.0, 0.0])
+    assert [p.symbol for p in out] == ["BTC/USDT", "SOL/USDT"]
+
+
+def test_retrieve_for_embeds_then_retrieves():
+    r = PrecedentRetriever(k=2, embed_fn=lambda t: [1.0, 0.0])
+    r._load_candidates = lambda cutoff: []
+    res = r.retrieve_for("setup card")
+    assert res.embedding == [1.0, 0.0] and res.precedents == []
+
+
+def test_retrieve_for_embed_failure_returns_empty():
+    r = PrecedentRetriever(embed_fn=lambda t: None)
+    res = r.retrieve_for("setup card")
+    assert res.embedding is None and res.precedents == []
+
+
+def test_retrieve_recency_cutoff_passed_to_loader():
+    captured = {}
+    r = PrecedentRetriever(k=2, horizon_candles=6, embed_fn=lambda t: [1.0, 0.0],
+                           now_fn=lambda: datetime(2026, 6, 2, 0, 0, 0))
+    def _loader(cutoff):
+        captured["cutoff"] = cutoff
+        return []
+    r._load_candidates = _loader
+    r.retrieve([1.0, 0.0])
+    assert captured["cutoff"] == datetime(2026, 6, 1, 0, 0, 0)
