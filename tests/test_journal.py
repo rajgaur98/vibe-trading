@@ -133,3 +133,50 @@ def test_retrieve_recency_cutoff_passed_to_loader():
     r._load_candidates = _loader
     r.retrieve([1.0, 0.0])
     assert captured["cutoff"] == datetime(2026, 6, 1, 0, 0, 0)
+
+
+def _row(action="long", symbol="BTC/USDT", entry=100.0):
+    return ("d1", symbol, datetime(2026, 6, 1), action, entry, [1.0, 0.0])
+
+
+def test_attach_outcome_closed_trade():
+    r = PrecedentRetriever()
+    pg = MagicMock()
+    pg.conn.execute.return_value.fetchone.return_value = ("win", 23.0, 1000.0)
+    r._pg = lambda: pg
+    p = r._attach_outcome(_row(action="long"), score=0.9)
+    assert p.kind == "closed"
+    assert round(p.outcome_pct, 2) == 2.3
+    assert "win" in p.outcome_label and "+2.3%" in p.outcome_label
+
+
+def test_attach_outcome_counterfactual_flat():
+    r = PrecedentRetriever(horizon_candles=6)
+    pg = MagicMock(); pg.conn.execute.return_value.fetchone.return_value = None
+    duck = MagicMock(); duck.conn.execute.return_value.fetchone.return_value = (110.0,)
+    r._pg = lambda: pg
+    r._duck = lambda: duck
+    p = r._attach_outcome(_row(action="flat", entry=100.0), score=0.8)
+    assert p.kind == "counterfactual"
+    assert round(p.outcome_pct, 2) == 10.0
+    assert "skipped" in p.outcome_label
+
+
+def test_attach_outcome_counterfactual_rejected_short_signs_by_action():
+    r = PrecedentRetriever(horizon_candles=6)
+    pg = MagicMock(); pg.conn.execute.return_value.fetchone.return_value = None
+    duck = MagicMock(); duck.conn.execute.return_value.fetchone.return_value = (90.0,)
+    r._pg = lambda: pg
+    r._duck = lambda: duck
+    p = r._attach_outcome(_row(action="short", entry=100.0), score=0.7)
+    assert round(p.outcome_pct, 2) == 10.0  # short profits when price falls 10%
+    assert "short" in p.outcome_label
+
+
+def test_attach_outcome_counterfactual_missing_future_candle_drops():
+    r = PrecedentRetriever(horizon_candles=6)
+    pg = MagicMock(); pg.conn.execute.return_value.fetchone.return_value = None
+    duck = MagicMock(); duck.conn.execute.return_value.fetchone.return_value = None
+    r._pg = lambda: pg
+    r._duck = lambda: duck
+    assert r._attach_outcome(_row(action="flat"), score=0.5) is None

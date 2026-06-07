@@ -163,3 +163,48 @@ class PrecedentRetriever:
             return [tuple(r) for r in rows]
         finally:
             pg.close()
+
+    def _attach_outcome(self, row, score):
+        decision_id, symbol, ts, action, entry_price, _vec = row
+        when = ts.date().isoformat() if hasattr(ts, "date") else str(ts)
+
+        # 1) Did this decision become a closed trade? -> real outcome.
+        pg = self._pg()
+        pg.connect()
+        try:
+            trade = pg.conn.execute(
+                "SELECT result, realized_pnl, size_usd FROM trades WHERE decision_id = ?",
+                (decision_id,),
+            ).fetchone()
+        finally:
+            pg.close()
+        if trade is not None:
+            result, realized_pnl, size_usd = trade
+            pct = (float(realized_pnl) / float(size_usd) * 100.0) if size_usd else 0.0
+            return Precedent(symbol, action, when, score, "closed", pct,
+                             f"traded {action} -> {result} {pct:+.1f}%")
+
+        # 2) Otherwise (FLAT / risk-rejected) -> counterfactual forward return from candles.
+        if not entry_price:
+            return None
+        cutoff = ts + timedelta(hours=self.horizon_candles * _CANDLE_HOURS)
+        duck = self._duck()
+        duck.connect()
+        try:
+            fut = duck.conn.execute(
+                "SELECT close FROM candles WHERE symbol = ? AND timeframe = '4h' "
+                "AND timestamp >= ? ORDER BY timestamp ASC LIMIT 1",
+                (symbol, cutoff),
+            ).fetchone()
+        finally:
+            duck.close()
+        if not fut or fut[0] is None:
+            return None  # horizon not elapsed / data gap -> drop, never fabricate
+        fwd = (float(fut[0]) - float(entry_price)) / float(entry_price) * 100.0
+        # sign by the proposed direction: a long profits on an up-move, a short on a down-move
+        signed = -fwd if action == "short" else fwd
+        if action == "flat":
+            label = f"skipped (flat); price moved {fwd:+.1f}% over {self.horizon_candles * _CANDLE_HOURS}h"
+        else:
+            label = f"{action} skipped (risk veto); would have {signed:+.1f}%"
+        return Precedent(symbol, action, when, score, "counterfactual", signed, label)
