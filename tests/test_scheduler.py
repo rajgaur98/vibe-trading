@@ -228,3 +228,28 @@ def test_snapshot_equity_noop_when_not_testnet(monkeypatch):
     sched._snapshot_equity()
     assert factory.call_count == 0                 # no connection opened in PAPER
     sched.broker.get_balance.assert_not_called()
+
+
+# --- journal RAG retriever wiring ---
+
+def test_build_retriever_noop_when_disabled(monkeypatch):
+    monkeypatch.setenv("JOURNAL_RAG_ENABLED", "false")
+    from vibe_trading.journal import NoOpRetriever
+    sched = _scheduler_without_init()
+    assert isinstance(sched._build_retriever(), NoOpRetriever)
+
+
+def test_build_retriever_real_when_enabled(monkeypatch):
+    monkeypatch.setenv("JOURNAL_RAG_ENABLED", "true")
+    from vibe_trading.journal import PrecedentRetriever
+    sched = _scheduler_without_init()
+    assert isinstance(sched._build_retriever(), PrecedentRetriever)
+
+
+def test_scheduler_imports_journal_for_persistence():
+    # The scheduler persists embeddings via journal.persist_embedding; assert it is wired.
+    import vibe_trading.runtime.scheduler as sched_mod
+    assert hasattr(sched_mod.journal, "persist_embedding")
+    conn = MagicMock()
+    sched_mod.journal.persist_embedding(conn, "d1", "BTC/USDT", "ts", "long", 100.0, "card", [0.1])
+    assert "INSERT INTO decision_embeddings" in conn.execute.call_args.args[0]

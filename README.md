@@ -302,3 +302,20 @@ price — e.g. the free-tier Gemma models — so projected $/month stays meaning
 
 Cost tracking itself is observational — a logging failure never interrupts a trade.
 
+## Trade-Journal RAG (decision memory)
+
+Before the Head Trader decides, the bot embeds the current **setup card** (analyst thesis +
+regime labels) with Gemini (`gemini-embedding-001`), cosine-ranks its **past** decisions
+in-memory, and injects the top-k similar setups + their outcomes into the trader's prompt as
+precedent — closed trades show the real PnL (joined `decision_id`→`trades`), while FLAT/risk-
+rejected decisions show a **counterfactual** forward return over the next 24h (from the candle
+cache). Each decision's setup embedding is persisted to `decision_embeddings` (keyed by
+`decision_id`) so it becomes a future precedent once its outcome lands.
+
+- Gated by `JOURNAL_RAG_ENABLED` (default on); model via `EMBEDDING_MODEL`; `JOURNAL_PRECEDENT_K`
+  precedents over a `JOURNAL_COUNTERFACTUAL_HORIZON_CANDLES`-candle horizon.
+- **Fail-soft:** any embed/retrieval/outcome error degrades to "no precedents" — exactly the
+  prior behavior — so it can never block or corrupt a tick.
+- **Eval-isolated:** the eval uses a no-op retriever, so the committed regression baseline is
+  unaffected (precedents are a live-only augmentation).
+

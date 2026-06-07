@@ -8,6 +8,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from langfuse import observe, propagate_attributes
 
 from vibe_trading import audit
+from vibe_trading import journal
 from vibe_trading.data.db import Database, PostgresDatabase
 from vibe_trading.data.fetcher import DataFetcher
 from vibe_trading.features.pipeline import FeaturePipeline
@@ -60,6 +61,7 @@ class TradingScheduler:
         self.decision_pipeline = DecisionPipeline(
             self.analyst, self.trader, self.risk_manager, self.pipeline, self.broker,
             scorecard=self.scorecard, trace_id_fn=self._current_trace_id,
+            retriever=self._build_retriever(),
         )
 
     def start(self):
@@ -200,6 +202,14 @@ class TradingScheduler:
                         """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
                               proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
                               proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id))
+                        # Persist the setup embedding (journal RAG) on the same connection, so
+                        # this decision becomes a future precedent once its outcome lands.
+                        journal.persist_embedding(
+                            self.pg_db.conn, proposal["decision_id"], proposal["symbol"],
+                            proposal["timestamp"], proposal["action"],
+                            float(snapshot.get("close", 0.0)),
+                            result.setup_text, result.setup_embedding,
+                        )
                     finally:
                         self.pg_db.close()
 
@@ -261,6 +271,14 @@ class TradingScheduler:
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")
+
+    def _build_retriever(self):
+        """Real PrecedentRetriever when JOURNAL_RAG_ENABLED (default true), else NoOp.
+        Gating is purely this flag — the eval never reaches here (it builds HeadTrader
+        directly), so eval scoring stays precedent-free and the baseline is unaffected."""
+        if os.getenv("JOURNAL_RAG_ENABLED", "true").lower() == "true":
+            return journal.PrecedentRetriever()
+        return journal.NoOpRetriever()
 
     def _snapshot_equity(self):
         """Record a portfolio_state point from the LIVE exchange balance (LIVE_TESTNET only).
