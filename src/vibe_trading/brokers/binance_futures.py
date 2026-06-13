@@ -123,17 +123,20 @@ class BinanceFuturesBroker(BaseBroker):
             entry_order = self.exchange.create_order(sym, "market", entry_side, qty)
             # The closePosition brackets are rejected (-4509) if the market entry's fill
             # hasn't registered as a position yet — a real propagation race on demo/prod.
-            # Wait (bounded) for the position before attaching the brackets.
-            self._await_position(sym)
+            # Wait (bounded) for the position before attaching the brackets, and HONOR the
+            # result: if the fill never registers, attaching brackets would only -4509 and
+            # leave a naked, unprotected entry. Roll back instead of risking that.
+            if not self._await_position(sym):
+                logger.error(f"BinanceFuturesBroker: entry fill for {symbol} never registered "
+                             f"as a position; rolling back rather than risk a naked entry.")
+                self._rollback_entry(sym)
+                return {"status": "rejected", "reason": "entry fill never registered as a position"}
             try:
-                tp_order = self.exchange.create_order(
-                    sym, "TAKE_PROFIT_MARKET", exit_side, None,
-                    params={"stopPrice": tp, "closePosition": True},
-                )
-                sl_order = self.exchange.create_order(
-                    sym, "STOP_MARKET", exit_side, None,
-                    params={"stopPrice": sl, "closePosition": True},
-                )
+                # Each bracket is placed via a helper that retries ONLY on -4509 (the
+                # registration race) — a clean rejection means nothing was placed, so the
+                # retry is duplicate-safe. Any other error is a real failure and propagates.
+                tp_order = self._place_close_order(sym, "TAKE_PROFIT_MARKET", exit_side, tp)
+                sl_order = self._place_close_order(sym, "STOP_MARKET", exit_side, sl)
             except Exception as e:
                 # Entry filled but a bracket failed → we'd be holding a NAKED, unprotected
                 # position. Roll the entry back immediately rather than leave it exposed.
@@ -159,10 +162,36 @@ class BinanceFuturesBroker(BaseBroker):
             logger.error(f"BinanceFuturesBroker: submit_order failed for {symbol}: {e}")
             return {"status": "rejected", "reason": str(e)}
 
+    def _place_close_order(self, sym: str, order_type: str, exit_side: str, trigger,
+                           attempts: int = 6, delay: float = 0.5):
+        """Place a single closePosition trigger order (TAKE_PROFIT_MARKET or STOP_MARKET),
+        retrying ONLY on -4509 ("TIF GTE can only be used with open positions"). That error
+        means the just-filled entry hasn't propagated to a position yet — a clean rejection
+        with nothing placed, so we re-await the position and retry (duplicate-safe). Any
+        other error is a genuine failure and re-raises immediately for the caller to handle."""
+        last_err = None
+        for _ in range(attempts):
+            try:
+                return self.exchange.create_order(
+                    sym, order_type, exit_side, None,
+                    params={"stopPrice": trigger, "closePosition": True},
+                )
+            except Exception as e:
+                if "-4509" not in str(e):
+                    raise  # real failure — don't mask it behind retries
+                last_err = e
+                self._await_position(sym)  # give the fill more time to register
+                time.sleep(delay)
+        raise last_err
+
     def _rollback_entry(self, sym: str) -> None:
-        """Close any open position for `sym` (reduce-only market) and cancel leftover
-        orders. Used to undo a just-filled entry when its protective brackets failed to
-        attach, so we never hold a naked, unprotected position."""
+        """Undo a just-filled entry whose protective brackets failed to attach, so we never
+        hold a naked, unprotected position. Crucially it WAITS for the fill to register
+        first — the same propagation lag that breaks bracket placement also hides the
+        position from a naive close — then issues a reduce-only market close, cancels
+        leftover orders, and VERIFIES the position is flat. If it cannot be flattened it
+        escalates to a CRITICAL operator alarm rather than silently leaving a naked entry."""
+        self._await_position(sym)  # the fill may not be visible yet; wait before closing
         try:
             positions = self.exchange.fetch_positions([sym])
             pos = next((p for p in positions if float(p.get("contracts") or 0) != 0), None)
@@ -172,10 +201,15 @@ class BinanceFuturesBroker(BaseBroker):
                 self.exchange.create_order(sym, "market", opp, contracts, params={"reduceOnly": True})
             self.exchange.cancel_all_orders(sym)
         except Exception as e:
-            logger.error(f"BinanceFuturesBroker: rollback failed for {sym}: {e}")
+            logger.error(f"BinanceFuturesBroker: rollback close/cancel failed for {sym}: {e}")
+        if not self._confirm_flat(sym):
+            logger.critical(
+                f"BinanceFuturesBroker: NAKED POSITION — rollback could not flatten {sym}; "
+                f"manual intervention required (an open position may have NO protective brackets)."
+            )
 
-    def _await_position(self, sym: str, attempts: int = 10, delay: float = 0.3) -> bool:
-        """Poll (bounded) until the just-submitted market entry registers as an open
+    def _await_position(self, sym: str, attempts: int = 20, delay: float = 0.5) -> bool:
+        """Poll (bounded, ~10s) until the just-submitted market entry registers as an open
         position, so the closePosition brackets aren't rejected with -4509. Returns True
         once a non-zero position is seen, False if it never appears within the budget."""
         for _ in range(attempts):
@@ -184,6 +218,20 @@ class BinanceFuturesBroker(BaseBroker):
             except Exception:
                 return False
             if any(abs(float(p.get("contracts") or 0)) > 0 for p in positions):
+                return True
+            time.sleep(delay)
+        return False
+
+    def _confirm_flat(self, sym: str, attempts: int = 6, delay: float = 0.5) -> bool:
+        """Poll (bounded) until no open position remains for `sym`. Returns True once flat;
+        False if a position is still showing after the budget — the caller should treat that
+        as a naked-position risk and alarm."""
+        for _ in range(attempts):
+            try:
+                positions = self.exchange.fetch_positions([sym])
+            except Exception:
+                return False
+            if not any(abs(float(p.get("contracts") or 0)) > 0 for p in positions):
                 return True
             time.sleep(delay)
         return False

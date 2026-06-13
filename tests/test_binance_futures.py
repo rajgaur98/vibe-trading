@@ -367,6 +367,130 @@ def test_delete_position_claim_semantics():
     assert broker2._delete_position("BTC/USDT") is False
 
 
+def test_brackets_retry_on_4509_then_succeed(monkeypatch):
+    """The closePosition bracket is rejected with -4509 while the entry fill is still
+    propagating to a position. Since -4509 is a clean rejection (nothing placed), the
+    broker must re-await the position and retry — not bail and leave a naked entry."""
+    monkeypatch.setattr("vibe_trading.brokers.binance_futures.time.sleep", lambda *_: None)
+    ex = _mock_exchange()
+    tp_attempts = {"n": 0}
+
+    def _ce(*args, **kwargs):
+        otype = args[1]
+        if otype == "TAKE_PROFIT_MARKET":
+            tp_attempts["n"] += 1
+            if tp_attempts["n"] == 1:
+                raise Exception('binance {"code":-4509,"msg":"Time in Force (TIF) GTE '
+                                'can only be used with open positions."}')
+            return {"id": "tp"}
+        if otype == "STOP_MARKET":
+            return {"id": "sl"}
+        return {"id": "entry", "average": 100.0, "price": 100.0}  # market entry
+
+    ex.create_order.side_effect = _ce
+    ex.fetch_positions.return_value = [{"symbol": "BTC/USDT:USDT", "contracts": 1.0, "side": "long"}]
+
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=1000.0,
+        stop_price=95.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    assert res["status"] == "success"
+    assert tp_attempts["n"] == 2            # the -4509 was retried, not given up on
+    ex.cancel_all_orders.assert_not_called()  # no rollback — the position is protected
+
+
+def test_brackets_non_4509_error_rolls_back_without_retry(monkeypatch):
+    """A non-(-4509) bracket error is a real failure: roll back immediately, don't retry."""
+    monkeypatch.setattr("vibe_trading.brokers.binance_futures.time.sleep", lambda *_: None)
+    ex = _mock_exchange()
+    tp_attempts = {"n": 0}
+
+    def _ce(*args, **kwargs):
+        if args[1] == "TAKE_PROFIT_MARKET":
+            tp_attempts["n"] += 1
+            raise Exception("insufficient margin")  # not -4509
+        return {"id": "o", "average": 100.0, "price": 100.0}
+
+    ex.create_order.side_effect = _ce
+    ex.fetch_positions.return_value = [{"symbol": "BTC/USDT:USDT", "contracts": 0.5, "side": "long"}]
+
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=1000.0,
+        stop_price=95.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    assert res["status"] == "rejected"
+    assert tp_attempts["n"] == 1            # tried once, no retry on a real error
+    ex.cancel_all_orders.assert_called_once_with("BTC/USDT:USDT")
+
+
+def test_submit_order_rejects_when_entry_never_registers(monkeypatch):
+    """If the entry fill never registers as a position within the budget, the broker must
+    NOT attach brackets (which would -4509 and orphan a naked entry) — it rolls back and
+    rejects instead."""
+    monkeypatch.setattr("vibe_trading.brokers.binance_futures.time.sleep", lambda *_: None)
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = []  # _await_position never sees the position
+    placed_types = []
+
+    def _ce(*args, **kwargs):
+        placed_types.append(args[1])
+        return {"id": "x", "average": 100.0, "price": 100.0}
+
+    ex.create_order.side_effect = _ce
+
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    res = broker.submit_order(
+        symbol="BTC/USDT", action="long", size_usd=1000.0,
+        stop_price=95.0, take_profit_price=110.0, entry_price=100.0,
+    )
+    assert res["status"] == "rejected"
+    # no protective brackets were ever attempted
+    assert "TAKE_PROFIT_MARKET" not in placed_types
+    assert "STOP_MARKET" not in placed_types
+    ex.cancel_all_orders.assert_called_with("BTC/USDT:USDT")
+
+
+def test_rollback_awaits_then_closes_late_position(monkeypatch):
+    """_rollback_entry must wait for the fill to register before closing — a position that
+    is invisible on the first poll but appears on the second must still be flattened."""
+    monkeypatch.setattr("vibe_trading.brokers.binance_futures.time.sleep", lambda *_: None)
+    ex = _mock_exchange()
+    seq = iter([
+        [],  # _await_position poll #1 — not visible yet
+        [{"symbol": "BTC/USDT:USDT", "contracts": 0.5, "side": "long"}],  # poll #2 — appears
+        [{"symbol": "BTC/USDT:USDT", "contracts": 0.5, "side": "long"}],  # rollback fetch
+        [],  # confirm_flat — flat after the reduce-only close
+    ])
+    ex.fetch_positions.side_effect = lambda *a, **k: next(seq)
+
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker._rollback_entry("BTC/USDT:USDT")
+
+    close = ex.create_order.call_args_list[-1]
+    assert close.args[1] == "market" and close.args[2] == "sell"
+    assert float(close.args[3]) == 0.5
+    assert close.kwargs["params"]["reduceOnly"] is True
+    ex.cancel_all_orders.assert_called_once_with("BTC/USDT:USDT")
+
+
+def test_rollback_logs_critical_when_cannot_flatten(monkeypatch, caplog):
+    """If the position cannot be flattened (stays open through every verification poll),
+    _rollback_entry must raise a CRITICAL operator alarm and still cancel leftover orders."""
+    import logging
+    monkeypatch.setattr("vibe_trading.brokers.binance_futures.time.sleep", lambda *_: None)
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [{"symbol": "BTC/USDT:USDT", "contracts": 0.5, "side": "long"}]
+
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    with caplog.at_level(logging.CRITICAL):
+        broker._rollback_entry("BTC/USDT:USDT")
+
+    assert any("NAKED POSITION" in r.message for r in caplog.records)
+    ex.cancel_all_orders.assert_called_once_with("BTC/USDT:USDT")
+
+
 def test_update_positions_idempotent_under_concurrent_claim():
     ex = _mock_exchange()
     ex.fetch_positions.return_value = []  # symbol flat on exchange
