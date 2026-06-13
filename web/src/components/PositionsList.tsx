@@ -9,9 +9,9 @@ interface Position {
   entry_time: string;
   entry_price: number;
   size_usd: number;
-  stop_price: number;
-  take_profit_price: number;
-  current_price?: number;
+  stop_price: number | null;        // null when the exchange has no readable resting bracket
+  take_profit_price: number | null; // (e.g. an unprotected position, or brackets not found)
+  current_price?: number | null;
 }
 
 export default function PositionsList({
@@ -174,13 +174,17 @@ export default function PositionsList({
                       <div>
                         <p className="text-rose-500/80 font-bold">Stop Loss</p>
                         <p className="text-slate-400 mt-0.5">
-                          ${pos.stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          {pos.stop_price != null
+                            ? `$${pos.stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+                            : "—"}
                         </p>
                       </div>
                       <div>
                         <p className="text-emerald-500/80 font-bold">Take Profit</p>
                         <p className="text-slate-400 mt-0.5">
-                          ${pos.take_profit_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          {pos.take_profit_price != null
+                            ? `$${pos.take_profit_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+                            : "—"}
                         </p>
                       </div>
                     </div>
