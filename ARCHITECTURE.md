@@ -180,19 +180,14 @@ votes on regimes rather than arithmetic on floats.
    ` ```json ``` `) before `json.loads`.
 4. The result is validated into `AnalystOutput` (Pydantic).
 
-**Legacy snapshot path (used by eval harness):**
+**Snapshot path (optional fast path):**
 
-When `TechnicalVolumeAnalyst` is constructed without `db` and `fetcher` (as in
-`eval/runner.py`), or when an explicit `snapshot` dict is passed, the analyst falls
-back to a single-shot `call_llm()` with `response_format=AnalystOutput`. The snapshot
-is the pre-computed dict from `FeaturePipeline.run()`.
-
-**Known divergence:** The eval harness always exercises the snapshot/legacy path
-(`TechnicalVolumeAnalyst(db=None, fetcher=None)` in `runner.run_case()`), while
-production uses the tool-loop path. This means eval scores measure the analyst's
-ability to synthesize a pre-computed feature dict, not its tool-selection and
-data-retrieval reasoning. The two paths share the same prompt and output schema, so
-improvements to the bias/volume-confirmation methodology are still validated by eval.
+When `TechnicalVolumeAnalyst` is constructed without `db` and `fetcher`, or when an
+explicit `snapshot` dict is passed, the analyst takes a single-shot `call_llm()` with
+`response_format=AnalystOutput`. The snapshot is the pre-computed dict from
+`FeaturePipeline.run()`. This is a cheap, deterministic shortcut — the eval harness can
+opt into it via `--analyst-path snapshot` for quick local iteration, but it is **not**
+the default and is never used in production (which always runs the tool-use loop above).
 
 ### The 6 Analyst Tools (`agents/tools.py`)
 
@@ -336,7 +331,7 @@ CDLHAMMER, CDLSHOOTINGSTAR.
 
 ### Golden Set
 
-20 hand-labeled YAML cases under `evals/snapshots/`. Each case (`EvalCase`) contains:
+34 hand-labeled YAML cases under `evals/snapshots/`. Each case (`EvalCase`) contains:
 - A symbol + timestamp pointing to real DuckDB candle history.
 - `analyst_label` with expected `market_bias`, `volume_confirmation`, `nearest_support`,
   `nearest_resistance`, `confluence_score`, and a `thesis_rubric`.
@@ -348,17 +343,20 @@ bucketing) and labeled by `evals/build_golden_set.py` (deterministic Murphy-rule
 
 ### Runner (`eval/runner.py`)
 
-`run_case()` builds a `FeaturePipeline` snapshot, runs the analyst on it (snapshot/
-legacy path — see divergence note below), then runs the trader fed the **labeled**
-analyst output (not the actual analyst output). This isolates trader regressions from
-analyst regressions.
+`run_case(case, db, analyst_path="tool-loop")` builds a `FeaturePipeline` snapshot, runs
+the analyst, then runs the trader fed the **labeled** analyst output (not the actual
+analyst output) — which isolates trader regressions from analyst regressions. The
+snapshot is always built (cheap, deterministic): it supplies the trader's `current_price`
+and the `snapshot_ok` gate regardless of which analyst path runs.
 
-**Known eval/prod divergence:** `run_case()` constructs `TechnicalVolumeAnalyst(db=None,
-fetcher=None)`, which forces the legacy snapshot path. Production always uses the
-tool-use loop path. The two paths share the same bias-selection methodology and output
-schema, so prompt changes that affect bias/volume-confirmation logic are covered. What
-the eval does *not* cover is tool-selection behavior, tool result interpretation, or
-multi-turn reasoning in the analyst.
+**Analyst path — same as production by default.** `eval.py` defaults to
+`--analyst-path tool-loop`, which constructs `TechnicalVolumeAnalyst(db=db,
+fetcher=DataFetcher())` and runs the exact multi-turn tool-use loop that ships in
+production. So the eval exercises tool selection, tool-result interpretation, and
+multi-turn reasoning — not just feature-dict synthesis. `--analyst-path snapshot`
+(`TechnicalVolumeAnalyst(db=None, fetcher=None)`, single `call_llm()`) is an optional
+fast path for cheap local iteration only; it scores differently, so `evals/baseline.json`
+is specific to the path it was produced on.
 
 ### Scorer (`eval/scorer.py`)
 
@@ -379,10 +377,11 @@ when the label action is not `"flat"` (a flat label has no entry strategy to val
 
 ### Baseline and CI
 
-`evals/baseline.json` — committed regression yardstick. Current baseline:
-`overall_score=0.867`, `analyst_score=0.956`, `trader_score=0.731` (22 cases,
-produced on `gemma-4-31b-it`). `eval.py` exits non-zero when the current run's score
-regresses below baseline. `--update-baseline` overwrites it after a reviewed improvement.
+`evals/baseline.json` — committed regression yardstick. Current baseline (produced on
+the tool-loop path over all 34 cases): `overall_score=0.788`, `analyst_score=0.807`,
+`trader_score=0.802`. `eval.py` exits non-zero when the current run's score regresses
+below baseline. `--update-baseline` overwrites it after a reviewed improvement; switching
+`--analyst-path` requires re-seeding the baseline, since the two paths score differently.
 
 The harness runs cases in parallel (`ThreadPoolExecutor`, default 6 workers) with the
 class-level `LLMClient` throttle bounding the actual RPM regardless of worker count.
@@ -567,6 +566,6 @@ Live Coinbase trading is gated behind `TRADING_MODE=LIVE_SANDBOX`, which swaps
 | `src/vibe_trading/eval/runner.py` | run_case(), EvalCase / CaseResult models |
 | `src/vibe_trading/eval/scorer.py` | Deterministic + LLM-as-judge scoring |
 | `src/vibe_trading/web/main.py` | FastAPI REST endpoints |
-| `evals/snapshots/` | 20 golden-set YAML cases |
-| `evals/baseline.json` | Committed regression yardstick (overall 0.867) |
+| `evals/snapshots/` | 34 golden-set YAML cases |
+| `evals/baseline.json` | Committed regression yardstick (overall 0.788, tool-loop, 34 cases) |
 | `docker-compose.yml` | Service definitions and port mappings |
