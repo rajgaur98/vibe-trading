@@ -220,6 +220,38 @@ semantics match the paper model. Futures (not spot) is used because the trader e
 
 ---
 
+## Cloud deployment ($0)
+
+The bot runs in the cloud as a **GitHub Actions scheduled job** — no always-on server.
+
+**How it works**
+- `ci.yml` builds the Docker image and pushes it to **GHCR** on every default-branch push (only after the hermetic `test` job passes).
+- `trade-cron.yml` runs every 4h (UTC, `1 */4 * * *`) and on manual dispatch: it pulls the image and runs `trade-once`.
+- Each run pulls the DuckDB candle cache from **Cloudflare R2** (S3-compatible), evaluates, writes all decisions to **Supabase Postgres**, then pushes the DB + audit Parquet back to R2.
+- On success it pings **healthchecks.io**; a missed/failed run raises an alert (dead-man's-switch). Trade alerts still go to Discord.
+
+**One-time setup**
+1. Create an R2 bucket; note its S3 endpoint + access keys.
+2. Create a healthchecks.io check on a 4h+grace schedule; note its ping URL.
+3. In the repo, add **Settings → Secrets and variables → Actions → Secrets**:
+   `GEMINI_API_KEY` (and/or `GROQ_API_KEY`/`LLM_PROVIDER`/`LLM_MODEL`), `POSTGRES_URL`,
+   `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_API_SECRET`, `LANGFUSE_PUBLIC_KEY`,
+   `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `DISCORD_WEBHOOK_URL`, `STATE_SYNC_BUCKET`,
+   `STATE_SYNC_ENDPOINT`, `STATE_SYNC_ACCESS_KEY_ID`, `STATE_SYNC_SECRET_ACCESS_KEY`,
+   `HEALTHCHECK_PING_URL`.
+4. Add a repo **Variable** `BINANCE_TESTNET_DRY_RUN=true` for the first rollout.
+
+**Rollout**
+- Push to the default branch so the image publishes to GHCR.
+- Trigger `trade-cron` manually (**Actions → trade-cron → Run workflow**) with `BINANCE_TESTNET_DRY_RUN=true`. Confirm a clean run end-to-end: pull → evaluate → Postgres writes → push → healthcheck ping (logs intended orders, places none).
+- Flip the `BINANCE_TESTNET_DRY_RUN` variable to `false` to go live. The 4h schedule takes over.
+
+**Rollback:** GHCR keeps prior tags. Pin `trade-cron.yml`'s image to a previous `:<sha>` (or re-publish an earlier commit). Re-running `trade-once` is idempotent — the reconcile + position-exists gates prevent duplicate entries.
+
+> **Note:** GitHub disables scheduled workflows after 60 days of repo inactivity, and cron timing is best-effort (a few minutes' jitter) — both harmless for a settled 4h candle.
+
+---
+
 ## Running Tests
 Run unit verification tests using pytest:
 ```bash
