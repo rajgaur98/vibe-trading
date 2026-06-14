@@ -64,6 +64,15 @@ class TradingScheduler:
             retriever=self._build_retriever(),
         )
 
+    def _build_scheduler(self):
+        """Construct the live-path scheduler, pinned to UTC and tolerant of brief
+        downtime, so the 4h cron fires at 00:01/04:01/.../20:01 UTC regardless of
+        the host's timezone."""
+        scheduler = BlockingScheduler(timezone="UTC")
+        scheduler.add_job(self.sync_and_evaluate, "cron", hour="*/4", minute=1,
+                          coalesce=True, misfire_grace_time=3600)
+        return scheduler
+
     def start(self):
         """Starts the main scheduling loop."""
         # 1. Start real-time fill bookkeeping FIRST (LIVE_TESTNET only) so the User Data
@@ -74,11 +83,9 @@ class TradingScheduler:
         logger.info("Initializing startup data synchronization...")
         self.sync_and_evaluate()
 
-        # 3. Setup recurring 4-hour scheduler
-        scheduler = BlockingScheduler()
-        # Schedule to run at the start of every 4h block (00:00, 04:00, 08:00, etc.)
-        scheduler.add_job(self.sync_and_evaluate, 'cron', hour='*/4', minute=1)
-        
+        # 3. Setup recurring 4-hour scheduler (UTC-pinned; see _build_scheduler)
+        scheduler = self._build_scheduler()
+
         logger.info("Scheduler started. Running on 4h intervals.")
         try:
             scheduler.start()

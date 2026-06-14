@@ -253,3 +253,13 @@ def test_scheduler_imports_journal_for_persistence():
     conn = MagicMock()
     sched_mod.journal.persist_embedding(conn, "d1", "BTC/USDT", "ts", "long", 100.0, "card", [0.1])
     assert "INSERT INTO decision_embeddings" in conn.execute.call_args.args[0]
+
+
+def test_build_scheduler_is_utc():
+    """The live-path APScheduler must be pinned to UTC, not the host's implicit tz,
+    so the 4h cron aligns with the UTC candle boundaries the rest of the code assumes."""
+    from vibe_trading.runtime.scheduler import TradingScheduler
+    # __new__ avoids __init__'s broker/DB/network setup — we only test the factory.
+    s = TradingScheduler.__new__(TradingScheduler)
+    sched = s._build_scheduler()
+    assert str(sched.timezone) == "UTC"
