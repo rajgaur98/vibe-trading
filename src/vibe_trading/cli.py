@@ -8,6 +8,7 @@ from vibe_trading.data.db import Database
 from vibe_trading.data.fetcher import DataFetcher
 from vibe_trading.eval.backtest import BacktestEngine
 from vibe_trading.runtime.scheduler import TradingScheduler
+from vibe_trading.runtime import state_sync, monitoring
 
 # Set up logging configuration
 logging.basicConfig(
@@ -18,6 +19,30 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("vibe_trading.cli")
+
+
+def _flush_langfuse():
+    try:
+        from langfuse import get_client
+        logger.info("Flushing Langfuse traces...")
+        get_client().flush()
+    except Exception as e:
+        logger.warning(f"Failed to flush Langfuse: {e}")
+
+
+def execute_trade_once(symbols):
+    """One scheduled execution window: warm state from the cache, run a single
+    sync+evaluate, ping the dead-man's-switch on success, and always flush traces
+    and push state back (even if evaluation raised)."""
+    state_sync.pull()
+    try:
+        scheduler = TradingScheduler(symbols)
+        scheduler.sync_and_evaluate()
+        monitoring.ping_healthcheck(success=True)
+    finally:
+        _flush_langfuse()
+        state_sync.push()
+
 
 def main():
     # Load dotenv keys
@@ -96,14 +121,7 @@ def main():
 
     elif args.command == "trade-once":
         logger.info(f"Triggering on-demand trading execution window for: {args.symbols}")
-        scheduler = TradingScheduler(args.symbols)
-        scheduler.sync_and_evaluate()
-        try:
-            from langfuse import get_client
-            logger.info("Flushing Langfuse traces...")
-            get_client().flush()
-        except Exception as e:
-            logger.warning(f"Failed to flush Langfuse: {e}")
+        execute_trade_once(args.symbols)
         logger.info("On-demand execution window completed.")
 
 if __name__ == "__main__":
