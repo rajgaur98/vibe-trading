@@ -56,11 +56,15 @@ jobs:
       - name: Install TA-Lib C library from source
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y build-essential wget
+          sudo apt-get install -y build-essential wget autotools-dev
           wget -q https://github.com/TA-Lib/ta-lib/releases/download/v0.4.0/ta-lib-0.4.0-src.tar.gz
           tar -xzf ta-lib-0.4.0-src.tar.gz
           cd ta-lib/
-          ./configure --prefix=/usr
+          # TA-Lib 0.4.0 ships ~2000-era config.guess/config.sub that can't detect modern
+          # build triplets; refresh them (mirrors the Dockerfile). The CFLAGS relax gcc-14's
+          # default -Werror for implicit declarations / int-conversion that breaks the old C.
+          cp /usr/share/misc/config.guess /usr/share/misc/config.sub . 2>/dev/null || true
+          ./configure --prefix=/usr CFLAGS="-O2 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion"
           make -j"$(nproc)"
           sudo make install
           sudo ldconfig
@@ -137,11 +141,15 @@ jobs:
         if: steps.gate.outputs.have_key == 'true'
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y build-essential wget
+          sudo apt-get install -y build-essential wget autotools-dev
           wget -q https://github.com/TA-Lib/ta-lib/releases/download/v0.4.0/ta-lib-0.4.0-src.tar.gz
           tar -xzf ta-lib-0.4.0-src.tar.gz
           cd ta-lib/
-          ./configure --prefix=/usr
+          # TA-Lib 0.4.0 ships ~2000-era config.guess/config.sub that can't detect modern
+          # build triplets; refresh them (mirrors the Dockerfile). The CFLAGS relax gcc-14's
+          # default -Werror for implicit declarations / int-conversion that breaks the old C.
+          cp /usr/share/misc/config.guess /usr/share/misc/config.sub . 2>/dev/null || true
+          ./configure --prefix=/usr CFLAGS="-O2 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion"
           make -j"$(nproc)"
           sudo make install
           sudo ldconfig
