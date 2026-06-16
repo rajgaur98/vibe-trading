@@ -222,33 +222,45 @@ semantics match the paper model. Futures (not spot) is used because the trader e
 
 ## Cloud deployment ($0)
 
-The bot runs in the cloud as a **GitHub Actions scheduled job** — no always-on server.
+The bot runs as an **always-on Docker container on an Oracle Cloud Always-Free VM** in a Binance-allowed region.
 
-**How it works**
-- `ci.yml` builds the Docker image and pushes it to **GHCR** on every default-branch push (only after the hermetic `test` job passes).
-- `trade-cron.yml` runs every 4h (UTC, `1 */4 * * *`) and on manual dispatch: it pulls the image and runs `trade-once`.
-- Each run pulls the DuckDB candle cache from **Cloudflare R2** (S3-compatible), evaluates, writes all decisions to **Supabase Postgres**, then pushes the DB + audit Parquet back to R2.
-- On success it pings **healthchecks.io**; a missed/failed run raises an alert (dead-man's-switch). Trade alerts still go to Discord.
+> **Why a VM and not serverless/CI?** Binance returns **HTTP 451** ("restricted location") to datacenter IPs in the US and certain regions. GitHub Actions (US Azure IPs), GCP's free tier (US-only regions), and Render/Fly free tiers are therefore geo-blocked and/or not free for an always-on job. An Oracle **Always-Free** VM in a Binance-allowed region (e.g. Mumbai, Hyderabad, Frankfurt, Singapore) reaches Binance and costs **$0**.
+
+**Architecture**
+- One Always-Free VM (`VM.Standard.E2.1.Micro`, x86) runs the image with the UTC-pinned `live` scheduler: `docker compose up -d vibe-bot`, `restart: unless-stopped`.
+- **State lives on the VM disk** — DuckDB candles + Parquet audit persist locally; no object storage needed (`STATE_SYNC_*` unset ⇒ `state_sync` no-ops).
+- Decisions / trades / positions / costs are written to **Supabase Postgres** (managed); the WS user-data stream records fills in real time; trade alerts go to **Discord**.
 
 **One-time setup**
-1. Create an R2 bucket; note its S3 endpoint + access keys.
-2. Create a healthchecks.io check on a 4h+grace schedule; note its ping URL.
-3. In the repo, add **Settings → Secrets and variables → Actions → Secrets**:
-   `GEMINI_API_KEY` (and/or `GROQ_API_KEY`/`LLM_PROVIDER`/`LLM_MODEL`), `POSTGRES_URL`,
-   `BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_API_SECRET`, `LANGFUSE_PUBLIC_KEY`,
-   `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`, `DISCORD_WEBHOOK_URL`, `STATE_SYNC_BUCKET`,
-   `STATE_SYNC_ENDPOINT`, `STATE_SYNC_ACCESS_KEY_ID`, `STATE_SYNC_SECRET_ACCESS_KEY`,
-   `HEALTHCHECK_PING_URL`.
-4. Add a repo **Variable** `BINANCE_TESTNET_DRY_RUN=true` for the first rollout.
+1. **Oracle Cloud Free account** — choose a home region that is **Binance-allowed (NOT US)**. The home region is permanent.
+2. **Create an Always-Free VM:** shape `VM.Standard.E2.1.Micro` (x86, green *Always Free-eligible* tag), image **Ubuntu 22.04**, a **public subnet with a public IPv4**, and your SSH key. (ARM `A1.Flex` is roomier and also free, but frequently *"out of host capacity"*.)
+3. **SSH in and run the Binance reachability gate first:**
+   ```bash
+   ssh -i <key> ubuntu@<PUBLIC_IP>
+   curl -s -o /dev/null -w "%{http_code}\n" https://demo-fapi.binance.com/fapi/v1/exchangeInfo   # expect 200, not 451
+   ```
+4. **Add swap (the micro has ~1 GB RAM) + install Docker:**
+   ```bash
+   sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+   curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker ubuntu && exit   # re-SSH after
+   ```
+5. **Get the code + secrets:**
+   ```bash
+   git clone https://github.com/<owner>/vibe-trading.git ~/vibe-trading
+   # From your LAPTOP (never commit secrets), copy your real .env to the VM:
+   #   scp -i <key> .env ubuntu@<PUBLIC_IP>:~/vibe-trading/.env
+   ```
+   The `.env` needs `TRADING_MODE=LIVE_TESTNET`, `POSTGRES_URL`, the `BINANCE_TESTNET_*` demo keys, the LLM key(s), and optionally `LANGFUSE_*` / `DISCORD_WEBHOOK_URL`. Leave `STATE_SYNC_*` **unset** (local disk persists).
+6. **Build + run:**
+   ```bash
+   cd ~/vibe-trading && docker compose up -d --build vibe-bot
+   docker compose logs -f vibe-bot      # watch the first cycle (bootstrap → analyst → trader → risk)
+   ```
 
-**Rollout**
-- Push to the default branch so the image publishes to GHCR.
-- Trigger `trade-cron` manually (**Actions → trade-cron → Run workflow**) with `BINANCE_TESTNET_DRY_RUN=true`. Confirm a clean run end-to-end: pull → evaluate → Postgres writes → push → healthcheck ping (logs intended orders, places none).
-- Flip the `BINANCE_TESTNET_DRY_RUN` variable to `false` to go live. The 4h schedule takes over.
+`restart: unless-stopped` + Docker enabled on boot means the bot survives crashes and VM reboots. **Update:** `cd ~/vibe-trading && git pull && docker compose up -d --build vibe-bot`.
 
-**Rollback:** GHCR keeps prior tags. Pin `trade-cron.yml`'s image to a previous `:<sha>` (or re-publish an earlier commit). Re-running `trade-once` is idempotent — the reconcile + position-exists gates prevent duplicate entries.
-
-> **Note:** GitHub disables scheduled workflows after 60 days of repo inactivity, and cron timing is best-effort (a few minutes' jitter) — both harmless for a settled 4h candle.
+> **Retired:** the GitHub Actions `trade-cron.yml` cron is **not used** — GitHub's US runners are `451`-blocked by Binance. `ci.yml` still builds/tests the image, but the VM builds its own from the Dockerfile. A future hardening item is wiring the healthchecks.io dead-man's-switch into the `live` loop (currently only `trade-once` pings it).
 
 ---
 
