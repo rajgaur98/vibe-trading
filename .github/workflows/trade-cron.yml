@@ -12,6 +12,7 @@ concurrency:
 jobs:
   trade-once:
     runs-on: ubuntu-latest
+    environment: prod   # secrets (POSTGRES_URL, Binance keys, R2, …) live in the 'prod' environment
     permissions:
       contents: read
       packages: read
