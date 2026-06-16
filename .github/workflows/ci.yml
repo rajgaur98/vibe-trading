@@ -65,7 +65,7 @@ jobs:
           # default -Werror for implicit declarations / int-conversion that breaks the old C.
           cp /usr/share/misc/config.guess /usr/share/misc/config.sub . 2>/dev/null || true
           ./configure --prefix=/usr CFLAGS="-O2 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion"
-          make -j"$(nproc)"
+          make           # serial: TA-Lib 0.4.0's gen_code target races under make -j (mirrors the Dockerfile)
           sudo make install
           sudo ldconfig
 
@@ -150,7 +150,7 @@ jobs:
           # default -Werror for implicit declarations / int-conversion that breaks the old C.
           cp /usr/share/misc/config.guess /usr/share/misc/config.sub . 2>/dev/null || true
           ./configure --prefix=/usr CFLAGS="-O2 -fcommon -Wno-implicit-function-declaration -Wno-implicit-int -Wno-int-conversion"
-          make -j"$(nproc)"
+          make           # serial: TA-Lib 0.4.0's gen_code target races under make -j (mirrors the Dockerfile)
           sudo make install
           sudo ldconfig
 
