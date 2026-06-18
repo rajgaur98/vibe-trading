@@ -8,6 +8,7 @@ from vibe_trading.data.db import Database, PostgresDatabase
 from vibe_trading.agents.cost import daily_summary
 from vibe_trading.runtime.scheduler import TradingScheduler
 from vibe_trading.web.live_positions import live_testnet_positions
+from vibe_trading.web.security import security_gate
 
 app = FastAPI(title="Vibe Trading API", description="REST endpoints for Vibe Trading Dashboard")
 
@@ -19,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Security gate: /api/trigger-tick is localhost-only; other /api/* require the
+# DASHBOARD_API_KEY header when that env var is set (see web/security.py).
+app.middleware("http")(security_gate)
 
 # Initialize PostgresDatabase once to set up the shared pool
 _pg_pool_init = PostgresDatabase()
