@@ -36,6 +36,16 @@ export default function Dashboard() {
   const [triggering, setTriggering] = useState(false);
   const [notification, setNotification] = useState<{ type: "success" | "error" | "info" | null; message: string }>({ type: null, message: "" });
 
+  // The /api/trigger-tick endpoint is localhost-only (see web/security.py on the API),
+  // so the "Scan & Trade" button is shown ONLY when the dashboard is viewed from
+  // localhost. On the public (Vercel) deployment it stays hidden — it would 403 anyway.
+  // Defaults to false so SSR and first client render match (no hydration mismatch).
+  const [isLocalhost, setIsLocalhost] = useState(false);
+  useEffect(() => {
+    const h = window.location.hostname;
+    setIsLocalhost(h === "localhost" || h === "127.0.0.1" || h === "::1");
+  }, []);
+
   async function triggerOnDemandTrade() {
     setTriggering(true);
     setNotification({ type: "info", message: "Analyzing market and running dynamic trade scan. Please wait..." });
@@ -177,14 +187,16 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-3">
-          <Button
-            onClick={triggerOnDemandTrade}
-            disabled={triggering || refreshing}
-            className="bg-emerald-600 hover:bg-emerald-500 text-slate-100 font-bold gap-2 cursor-pointer transition-colors"
-          >
-            <PlayCircle className={`w-3.5 h-3.5 ${triggering ? "animate-spin" : ""}`} />
-            {triggering ? "Scanning Market..." : "Scan & Trade"}
-          </Button>
+          {isLocalhost && (
+            <Button
+              onClick={triggerOnDemandTrade}
+              disabled={triggering || refreshing}
+              className="bg-emerald-600 hover:bg-emerald-500 text-slate-100 font-bold gap-2 cursor-pointer transition-colors"
+            >
+              <PlayCircle className={`w-3.5 h-3.5 ${triggering ? "animate-spin" : ""}`} />
+              {triggering ? "Scanning Market..." : "Scan & Trade"}
+            </Button>
+          )}
 
           <Button
             onClick={fetchDashboardData}
