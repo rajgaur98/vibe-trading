@@ -5,8 +5,46 @@ from pathlib import Path
 import logging
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Dimensionality of journal embeddings (gemini/gemini-embedding-001 = 3072).
+# Drives the pgvector column typmod, query casts, and index DDL.
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "3072"))
+
+
+def resolve_embedding_dim(existing_len, env_dim: int) -> int:
+    """The dim the migration must use: existing rows win (migrating a live table
+    to the wrong typmod would corrupt it); env is the cold-start default."""
+    if existing_len:
+        return int(existing_len)
+    if env_dim <= 0:
+        raise ValueError(f"EMBEDDING_DIM must be positive, got {env_dim}")
+    return env_dim
+
+
+def pgvector_migration_statements(dim: int) -> list:
+    """DDL to move decision_embeddings.embedding from float8[] to vector(dim) and
+    index it. The index is pgvector's documented halfvec EXPRESSION form because
+    HNSW on plain vector caps at 2000 dims (ours is 3072). Queries must use the
+    byte-identical cast expression to hit the index (see journal.pgvector_topk_sql)."""
+    return [
+        f"ALTER TABLE decision_embeddings "
+        f"ALTER COLUMN embedding TYPE vector({dim}) USING embedding::vector({dim})",
+        f"CREATE INDEX IF NOT EXISTS decision_embeddings_embedding_hnsw "
+        f"ON decision_embeddings "
+        f"USING hnsw ((embedding::halfvec({dim})) halfvec_cosine_ops)",
+    ]
+
+
+def adapt_embedding(vec):
+    """Adapt a Python list embedding for the active decision_embeddings column type:
+    float32 ndarray when pgvector is registered (the pgvector psycopg2 adapter
+    serializes ndarrays to vector literals), plain list for the float8[] fallback."""
+    if PostgresDatabase.pgvector_enabled:
+        return np.asarray(vec, dtype=np.float32)
+    return list(vec)
 
 class Database:
     def __init__(self, db_path: str = None, read_only: bool = False):
@@ -251,6 +289,8 @@ class PostgresConnectionWrapper:
 class PostgresDatabase:
     """Manages thread-safe connection pool to Supabase Postgres."""
     _pool = None
+    pgvector_enabled = False   # extension present + column migrated to vector
+    pgvector_halfvec = False   # halfvec type available (pgvector >= 0.7) -> HNSW index built
 
     def __init__(self, db_url: str = None):
         if not db_url:
@@ -280,6 +320,12 @@ class PostgresDatabase:
             try:
                 raw_conn = PostgresDatabase._pool.getconn()
                 self.conn = PostgresConnectionWrapper(raw_conn)
+                if PostgresDatabase.pgvector_enabled:
+                    try:
+                        from pgvector.psycopg2 import register_vector
+                        register_vector(raw_conn)  # idempotent per connection
+                    except Exception as e:
+                        logger.warning(f"pgvector register_vector failed (non-fatal): {e}")
                 logger.info("Acquired connection from Postgres pool.")
             except Exception as e:
                 logger.error(f"Failed to get connection from pool: {e}")
@@ -416,6 +462,41 @@ class PostgresDatabase:
                 "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
             ):
                 self.conn.execute(stmt)
+
+            # --- pgvector enablement (fail-soft; see docs/superpowers/plans/...) ---
+            try:
+                try:
+                    self.conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                except Exception:
+                    self.conn.rollback()  # no privilege / no extension -> fallback path
+                ext = self.conn.execute(
+                    "SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone()
+                if ext:
+                    col = self.conn.execute(
+                        "SELECT udt_name FROM information_schema.columns "
+                        "WHERE table_name = 'decision_embeddings' "
+                        "AND column_name = 'embedding'").fetchone()
+                    if col and col[0] == "_float8":  # still float8[] -> migrate once
+                        row = self.conn.execute(
+                            "SELECT array_length(embedding, 1) FROM decision_embeddings "
+                            "LIMIT 1").fetchone()
+                        dim = resolve_embedding_dim(row[0] if row else None, EMBEDDING_DIM)
+                        for stmt in pgvector_migration_statements(dim):
+                            try:
+                                self.conn.execute(stmt)
+                            except Exception as e:
+                                # index DDL may fail on pgvector < 0.7 (no halfvec);
+                                # the column migration alone is still a win.
+                                logger.warning(f"pgvector DDL skipped: {e}")
+                                self.conn.rollback()
+                    PostgresDatabase.pgvector_enabled = True
+                    half = self.conn.execute(
+                        "SELECT 1 FROM pg_type WHERE typname = 'halfvec'").fetchone()
+                    PostgresDatabase.pgvector_halfvec = bool(half)
+                    logger.info(f"pgvector enabled (halfvec={PostgresDatabase.pgvector_halfvec}).")
+            except Exception as e:
+                logger.warning(f"pgvector probe failed — using in-Python retrieval: {e}")
+
             self.conn.commit()
             logger.info("Supabase Postgres tables verified successfully.")
         except Exception as e:
