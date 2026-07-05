@@ -998,3 +998,28 @@ def test_run_case_defaults_to_snapshot_path(mock_pipeline_cls, mock_analyst_cls,
     assert init_kwargs.get("db") is None and init_kwargs.get("fetcher") is None
     analyze_kwargs = mock_analyst_cls.return_value.analyze.call_args.kwargs
     assert analyze_kwargs.get("snapshot") is not None
+
+
+def test_suite_report_captures_prompt_versions():
+    from vibe_trading.agents import prompts
+    from vibe_trading.eval.report import SuiteReport
+    report = SuiteReport.from_scores([])
+    assert report.prompt_versions == prompts.versions_map()
+
+
+def test_write_baseline_includes_prompt_versions(tmp_path):
+    import json
+    from vibe_trading.eval.report import SuiteReport, write_baseline
+    report = SuiteReport.from_scores([])
+    path = tmp_path / "baseline.json"
+    write_baseline(report, path)
+    data = json.loads(path.read_text())
+    assert data["prompt_versions"] == report.prompt_versions
+
+
+def test_diff_tolerates_baseline_without_prompt_versions():
+    from vibe_trading.eval.report import SuiteReport, diff_against_baseline
+    report = SuiteReport.from_scores([])
+    old_baseline = {"overall_score": 0.0, "per_case": {}}  # pre-versioning shape
+    diff = diff_against_baseline(report, old_baseline)
+    assert diff.is_regression is False
