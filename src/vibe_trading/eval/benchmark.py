@@ -224,6 +224,10 @@ def run_model(spec: str, cases: list, judge, max_workers: int,
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
+    for noisy in ("LiteLLM", "litellm", "httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     parser = argparse.ArgumentParser(prog="vibe-benchmark")
     parser.add_argument("--models", required=True,
                         help="Comma-separated litellm-format specs, e.g. "
