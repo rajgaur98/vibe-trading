@@ -342,6 +342,23 @@ Run the full golden-set suite across several models and compare quality vs cost:
   [evals/BENCHMARK.md](evals/BENCHMARK.md) table (sorted by score-per-dollar).
 - The committed regression baseline (`evals/baseline.json`) is never touched.
 
+### Prompt versioning
+
+All system prompts live in `src/vibe_trading/agents/prompts.py` as versioned,
+content-hashed `PromptSpec`s. Every LLM call records its prompt stamp
+(`name:vN@sha12`) in `llm_cost_log.prompt_version`; every decision records the
+full bundle in `decision_log.prompt_version`; every eval report and the committed
+baseline record the `prompt_versions` map.
+
+Changing a prompt:
+
+1. Edit the text in `prompts.py` **and bump its `version`** — an unbumped edit
+   fails `tests/test_prompts.py`.
+2. Regenerate pins:
+   `python -m vibe_trading.agents.prompts --write-pins tests/fixtures/prompt_pins.json`
+3. Run the eval regression gate (`python -m vibe_trading.eval.eval`); re-seed via
+   `--update-baseline` only for a reviewed, intentional change.
+
 ## Cost Tracking
 
 Every LLM call's tokens, dollar cost, and latency are logged to the `llm_cost_log`

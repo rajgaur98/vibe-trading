@@ -224,6 +224,14 @@ Every field uses `Literal` types (for categoricals) or `float` with doc descript
 Structural output is enforced via `response_format=<ModelClass>` in `litellm.completion`,
 which maps to OpenAI's structured-output API on supported models.
 
+### Prompt Versioning
+
+All prompts are registry-owned and stamped end-to-end: every LLM call records its prompt
+version in the cost log, every decision records the prompt bundle in the decision log, and
+eval baselines are annotated with their `prompt_versions` map so prompt-impact diffs are
+reviewable in PRs. See the README's [Prompt versioning](#prompt-versioning) section for the
+safe change workflow.
+
 ---
 
 ## 3. Multi-Provider LLM Client (`agents/client.py`)
