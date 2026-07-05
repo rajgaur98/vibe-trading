@@ -38,6 +38,15 @@ def execute_trade_once(symbols):
     try:
         scheduler = TradingScheduler(symbols)
         scheduler.sync_and_evaluate()
+
+        # Online evals (best-effort): score decisions whose outcomes just became
+        # knowable. A scoring failure must never fail the trade window.
+        try:
+            from vibe_trading.eval.online import run_scoring_pass
+            run_scoring_pass()
+        except Exception as e:
+            logger.warning(f"online scoring pass failed (non-fatal): {e}")
+
         monitoring.ping_healthcheck(success=True)
     finally:
         _flush_langfuse()
@@ -78,6 +87,12 @@ def main():
         "--live-agents", action="store_true", default=False,
         help="If set, calls Gemini APIs instead of local technical mocks"
     )
+    backtest_parser.add_argument(
+        "--journal-rag", action="store_true", default=False,
+        help="Enable replay journal RAG (precedents for the trader). Requires --live-agents.")
+    backtest_parser.add_argument(
+        "--summary-out", type=str, default=None,
+        help="Write the summary dict as JSON (for A/B diffing).")
 
     # 3. Live command
     live_parser = subparsers.add_parser("live", help="Start the live recurring trading scheduler")
@@ -106,13 +121,20 @@ def main():
         start_dt = datetime.strptime(args.start, "%Y-%m-%d")
         end_dt = datetime.strptime(args.end, "%Y-%m-%d")
         
+        if args.journal_rag and not args.live_agents:
+            parser.error("--journal-rag requires --live-agents")
+
         logger.info(f"Starting backtest for {args.symbols} ({start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')})")
         db = Database()
-        engine = BacktestEngine(db, args.symbols)
+        engine = BacktestEngine(db, args.symbols, journal_rag=args.journal_rag)
         results = engine.run(start_dt, end_dt, use_live_agents=args.live_agents)
         print("\n=== Backtest Summary ===")
         for k, v in results.items():
             print(f"{k}: {v}")
+        if args.summary_out:
+            import json as _json
+            from pathlib import Path as _Path
+            _Path(args.summary_out).write_text(_json.dumps(results, indent=2, default=str))
 
     elif args.command == "live":
         logger.info(f"Starting recurring 4-hour live scheduler for: {args.symbols}")

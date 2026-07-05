@@ -15,7 +15,8 @@ from vibe_trading.agents.analyst import AnalystOutput
 logger = logging.getLogger(__name__)
 
 class BacktestEngine:
-    def __init__(self, db: Database, symbols: List[str], initial_balance: float = 10000.0):
+    def __init__(self, db: Database, symbols: List[str], initial_balance: float = 10000.0,
+                 journal_rag: bool = False):
         self.db = db
         self.symbols = symbols
         self.initial_balance = initial_balance
@@ -23,6 +24,8 @@ class BacktestEngine:
         self.risk_manager = RiskManager()
         self.broker = PaperBroker(initial_balance)
         self.equity_curve: List[Dict[str, Any]] = []
+        self.journal_rag = journal_rag
+        self.replay_journal = None   # built in run() once the DB is connected
 
     def run(self, start_date: datetime, end_date: datetime, use_live_agents: bool = False) -> Dict[str, Any]:
         """
@@ -31,6 +34,19 @@ class BacktestEngine:
         """
         logger.info(f"Starting backtest from {start_date} to {end_date}...")
         self.db.connect()
+
+        if self.journal_rag:
+            from vibe_trading.journal import ReplayJournal
+
+            def _candle_close(symbol, target_ts, not_after_ts):
+                row = self.db.conn.execute(
+                    "SELECT close FROM candles WHERE symbol = ? AND timeframe = '4h' "
+                    "AND timestamp >= ? AND timestamp <= ? "
+                    "ORDER BY timestamp ASC LIMIT 1",
+                    (symbol, target_ts, not_after_ts)).fetchone()
+                return row[0] if row else None
+
+            self.replay_journal = ReplayJournal(candle_close_fn=_candle_close)
 
         # Get all 4h candle timestamps in range
         # Note: We sort ascending to process in chronological order
@@ -56,6 +72,9 @@ class BacktestEngine:
         })
 
         for i, ts in enumerate(timestamps):
+            if self.replay_journal is not None:
+                self.replay_journal.current_ts = ts
+
             # 1. Update prices for active positions from the current candle's open/close
             current_prices = {}
             for sym in self.symbols:
@@ -69,7 +88,11 @@ class BacktestEngine:
 
             # Update broker positions and capture closed trades
             closed_trades = self._update_and_resolve_brackets(ts, current_prices)
-            
+
+            if self.replay_journal is not None:
+                for trade in closed_trades:
+                    self.replay_journal.record_closed_trade(trade)
+
             # Log equity daily value
             if ts.hour == 0 or i == len(timestamps) - 1:
                 self.equity_curve.append({
@@ -117,7 +140,8 @@ class BacktestEngine:
                         action=proposal["action"],
                         size_usd=risk_res["size_usd"],
                         stop_price=risk_res["stop_price"],
-                        take_profit_price=risk_res["take_profit_price"]
+                        take_profit_price=risk_res["take_profit_price"],
+                        decision_id=proposal.get("decision_id"),
                     )
 
         self.db.close()
@@ -132,6 +156,7 @@ class BacktestEngine:
             from vibe_trading.agents.trader import HeadTrader
             from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
             from vibe_trading.data.fetcher import DataFetcher
+            from vibe_trading.journal import build_setup_card
 
             analyst = TechnicalVolumeAnalyst(db=self.db, fetcher=DataFetcher())
             trader = HeadTrader()
@@ -140,10 +165,28 @@ class BacktestEngine:
             open_positions = self.broker.get_open_positions()
 
             analyst_res = analyst.analyze(symbol=symbol, timestamp=timestamp)
+
+            retrieval = None
+            precedents = None
+            if self.replay_journal is not None:
+                setup_text = build_setup_card(analyst_res, snapshot)
+                retrieval = self.replay_journal.retrieve_for(setup_text)
+                precedents = retrieval.precedents
+
             proposal = trader.decide(symbol, analyst_res, scorecard, open_positions,
-                                     current_price=float(snapshot.get("close", 0.0)))
+                                     current_price=float(snapshot.get("close", 0.0)),
+                                     precedents=precedents)
+
+            if self.replay_journal is not None and retrieval is not None:
+                self.replay_journal.record_decision(
+                    proposal["decision_id"], symbol, timestamp, proposal["action"],
+                    float(snapshot.get("close", 0.0)), retrieval.embedding)
             return proposal
         else:
+            if self.replay_journal is not None:
+                raise ValueError("--journal-rag requires --live-agents: the mock "
+                                 "signal has no analyst thesis to embed.")
+
             # Deterministic Mock Trading Agent (Simulates technical vibes)
             rsi = snapshot["rsi_14"]
             obv_trend = snapshot["obv_trend"]
@@ -214,7 +257,8 @@ class BacktestEngine:
                     "close_price": exit_price,
                     "size_usd": pos["size_usd"],
                     "realized_pnl": pnl,
-                    "result": "win" if pnl > 0 else "loss"
+                    "result": "win" if pnl > 0 else "loss",
+                    "decision_id": pos.get("decision_id"),
                 }
                 self.broker.trade_history.append(closed_info)
                 self.broker.positions.pop(sym)

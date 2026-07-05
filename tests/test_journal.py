@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from vibe_trading.journal import (
     build_setup_card, cosine_topk, NoOpRetriever, RetrievalResult, Precedent,
 )
@@ -180,3 +182,95 @@ def test_attach_outcome_counterfactual_missing_future_candle_drops():
     r._pg = lambda: pg
     r._duck = lambda: duck
     assert r._attach_outcome(_row(action="flat"), score=0.5) is None
+
+
+def test_pgvector_topk_sql_halfvec_matches_index_expression():
+    from vibe_trading.journal import pgvector_topk_sql
+    sql = pgvector_topk_sql(halfvec=True, dim=3072)
+    # must be byte-identical to the index expression or the HNSW index is skipped
+    assert "embedding::halfvec(3072) <=> ?::halfvec(3072)" in sql
+    assert "1 - (embedding::halfvec(3072) <=> ?::halfvec(3072)) AS similarity" in sql
+    assert "WHERE timestamp < ?" in sql and "LIMIT ?" in sql
+
+
+def test_pgvector_topk_sql_plain_vector_without_halfvec():
+    from vibe_trading.journal import pgvector_topk_sql
+    sql = pgvector_topk_sql(halfvec=False, dim=3072)
+    assert "halfvec" not in sql
+    assert "embedding <=> ?" in sql
+
+
+def test_retriever_uses_sql_path_when_pgvector_active():
+    from unittest.mock import MagicMock
+    from datetime import datetime
+    from vibe_trading.journal import PrecedentRetriever
+
+    pg = MagicMock()
+    pg.conn.execute.return_value.fetchall.return_value = [
+        ("dec-1", "BTC/USDT", datetime(2026, 6, 1), "long", 100.0, 0.93),
+    ]
+    pg.conn.execute.return_value.fetchone.return_value = ("win", 50.0, 1000.0)
+    r = PrecedentRetriever(pg_factory=lambda: pg, use_pgvector=True,
+                           now_fn=lambda: datetime(2026, 7, 5))
+    precedents = r.retrieve([0.1] * 4)
+    assert len(precedents) == 1
+    assert precedents[0].similarity == pytest.approx(0.93)
+    assert precedents[0].kind == "closed"
+    ranking_sql = [c.args[0] for c in pg.conn.execute.call_args_list
+                   if "ORDER BY" in c.args[0]]
+    assert ranking_sql and "<=>" in ranking_sql[0]   # ranking happened in SQL
+
+
+def test_retriever_fallback_path_unchanged_when_pgvector_off():
+    from unittest.mock import MagicMock
+    from datetime import datetime
+    from vibe_trading.journal import PrecedentRetriever
+
+    pg = MagicMock()
+    pg.conn.execute.return_value.fetchall.return_value = []
+    r = PrecedentRetriever(pg_factory=lambda: pg, use_pgvector=False,
+                           now_fn=lambda: datetime(2026, 7, 5))
+    assert r.retrieve([0.1] * 4) == []
+    sql = pg.conn.execute.call_args_list[0].args[0]
+    assert "<=>" not in sql                 # candidates loaded, ranked in Python
+    assert "SELECT decision_id, symbol" in sql
+
+
+def test_replay_journal_no_lookahead_and_outcomes():
+    from datetime import datetime, timedelta
+    from vibe_trading.journal import ReplayJournal
+
+    fixed = [0.9, 0.1, 0.0]
+    journal_ = ReplayJournal(
+        k=4, horizon_candles=6, embed_fn=lambda text: fixed,
+        candle_close_fn=lambda sym, target, not_after: 104.0)
+    t0 = datetime(2026, 6, 1, 0, 0)
+
+    # decision older than the horizon relative to the replay clock -> retrievable
+    journal_.record_decision("dec-old", "BTC/USDT", t0, "long", 100.0, fixed)
+    # decision INSIDE the horizon -> must NOT be retrievable (outcome unknown yet)
+    journal_.record_decision("dec-new", "BTC/USDT", t0 + timedelta(hours=30),
+                             "long", 100.0, fixed)
+    journal_.current_ts = t0 + timedelta(hours=36)   # horizon = 24h
+
+    result = journal_.retrieve_for("whatever")
+    assert len(result.precedents) == 1               # only dec-old
+    p = result.precedents[0]
+    assert p.kind == "counterfactual"
+    assert p.outcome_pct == pytest.approx(4.0)       # (104-100)/100, long
+
+    # once its trade closes, the precedent switches to the real outcome
+    journal_.record_closed_trade({"decision_id": "dec-old", "result": "win",
+                                  "realized_pnl": 80.0, "size_usd": 1000.0})
+    p2 = journal_.retrieve_for("whatever").precedents[0]
+    assert p2.kind == "closed"
+    assert p2.outcome_pct == pytest.approx(8.0)
+
+
+def test_replay_journal_empty_and_failed_embed_degrade():
+    from datetime import datetime
+    from vibe_trading.journal import ReplayJournal
+    journal_ = ReplayJournal(embed_fn=lambda text: None)
+    journal_.current_ts = datetime(2026, 6, 2)
+    result = journal_.retrieve_for("x")
+    assert result.embedding is None and result.precedents == []

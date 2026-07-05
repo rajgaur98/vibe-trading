@@ -83,19 +83,9 @@ class JudgeOutput(BaseModel):
     must_not_mention_results: list[CriterionEvaluation]
 
 
-_JUDGE_SYSTEM = """
-You are a meticulous, code-review-style evaluator. You will receive a piece of agent-generated
-text and a rubric of must-mention and must-not-mention criteria.
+from vibe_trading.agents import prompts
 
-For each must-mention criterion: mark passed=true only if the criterion is clearly present in the
-text (not just hinted at). Otherwise passed=false.
-
-For each must-not-mention criterion: mark passed=true if the criterion is clearly absent from the
-text. If the text clearly violates it, passed=false.
-
-Output strictly matches the JudgeOutput JSON schema. Provide a one-sentence justification per
-criterion.
-""".strip()
+_JUDGE_SYSTEM = prompts.JUDGE_SYSTEM.text
 
 def build_judge() -> Callable[[str, Rubric], JudgeOutput]:
     """Returns a closure that, given (actual_text, rubric), calls an LLM judge and parses its output.
@@ -119,6 +109,7 @@ def build_judge() -> Callable[[str, Rubric], JudgeOutput]:
             system_instruction=_JUDGE_SYSTEM,
             prompt=prompt,
             response_schema=JudgeOutput,
+            prompt_version=prompts.JUDGE_SYSTEM.stamp,
         )
         return JudgeOutput.model_validate_json(raw)
 

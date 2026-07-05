@@ -63,12 +63,16 @@ class CostEvent(BaseModel):
     # structured response has been validated; None for calls with no schema to
     # validate (e.g. intermediate tool-call turns), so they don't skew the rate.
     schema_ok: Optional[bool] = None
+    # Stamp of the prompt that drove this call ("name:vN@sha12", see agents/prompts.py).
+    # None for calls with no registered prompt (embeddings, legacy call sites).
+    prompt_version: Optional[str] = None
 
     @classmethod
     def build(cls, *, provider: str, model: str, call_type: str,
               prompt_tokens: int, completion_tokens: int, latency_ms: float,
               cache_read_tokens: int = 0, cache_write_tokens: int = 0,
-              schema_ok: Optional[bool] = None) -> "CostEvent":
+              schema_ok: Optional[bool] = None,
+              prompt_version: Optional[str] = None) -> "CostEvent":
         return cls(
             call_id=str(uuid4()),
             timestamp=_utcnow_naive(),
@@ -83,6 +87,7 @@ class CostEvent(BaseModel):
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
             schema_ok=schema_ok,
+            prompt_version=prompt_version,
         )
 
 
@@ -104,12 +109,13 @@ class PostgresCostLogger:
                 """INSERT OR IGNORE INTO llm_cost_log
                    (call_id, timestamp, provider, model, call_type,
                     prompt_tokens, completion_tokens, total_tokens, cost_usd, latency_ms,
-                    cache_read_tokens, cache_write_tokens, schema_ok)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    cache_read_tokens, cache_write_tokens, schema_ok, prompt_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (event.call_id, event.timestamp, event.provider, event.model, event.call_type,
                  event.prompt_tokens, event.completion_tokens, event.total_tokens,
                  event.cost_usd, event.latency_ms,
-                 event.cache_read_tokens, event.cache_write_tokens, event.schema_ok),
+                 event.cache_read_tokens, event.cache_write_tokens, event.schema_ok,
+                 event.prompt_version),
             )
         except Exception as e:
             logger.warning(f"cost logging failed (non-fatal): {e}")

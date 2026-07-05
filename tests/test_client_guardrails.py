@@ -32,3 +32,36 @@ def test_max_output_tokens_zero_disables_cap(monkeypatch):
     with patch("vibe_trading.agents.client.litellm.completion", return_value=_fake_response()) as comp:
         client.call_llm("some-model", "system", "prompt")
     assert "max_tokens" not in comp.call_args.kwargs  # <=0 => no ceiling sent
+
+
+def test_call_llm_threads_prompt_version_into_cost_event(monkeypatch):
+    import litellm
+    from vibe_trading.agents.client import LLMClient
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    captured = []
+
+    class Sink:
+        def record(self, event):
+            captured.append(event)
+
+    class FakeMsg:
+        content = "{}"
+    class FakeChoice:
+        message = FakeMsg()
+    class FakeUsage:
+        prompt_tokens = 10
+        completion_tokens = 5
+    class FakeResponse:
+        choices = [FakeChoice()]
+        usage = FakeUsage()
+
+    monkeypatch.setattr(litellm, "completion", lambda **kw: FakeResponse())
+    LLMClient.set_cost_sink(Sink())
+    try:
+        client = LLMClient()
+        client.call_llm(model_name="m", system_instruction="s", prompt="p",
+                        prompt_version="analyst_system:v1@abcdef123456")
+    finally:
+        LLMClient.set_cost_sink(None)
+    assert captured[0].prompt_version == "analyst_system:v1@abcdef123456"

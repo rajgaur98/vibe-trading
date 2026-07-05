@@ -8,6 +8,7 @@ from decimal import Decimal
 from langfuse import observe, propagate_attributes
 from vibe_trading.agents.client import LLMClient, validate_structured
 from vibe_trading.agents.analyst import AnalystOutput
+from vibe_trading.agents import prompts
 
 
 class HeadTraderOutput(BaseModel):
@@ -36,50 +37,7 @@ class HeadTrader:
         provider = self.client.provider
         self.model = os.getenv(f"{provider.upper()}_TRADER_MODEL") or self.client.model
 
-        
-        self.system_instruction = """
-You are the Head Trader of a systematic crypto SWING-trading hedge fund.
-Your job is to synthesize technical analysis, volume analysis, and historical performance metrics to make a final, highly disciplined trading decision.
-
-You will receive:
-1. An Analyst report containing bias, volume confirmation, and structural S/R zones (nearest_support, nearest_resistance).
-2. The current market price.
-3. The historical accuracy scorecard for the analyst.
-4. The current portfolio positions.
-
-Your core directives:
-- Keep risk parameters strict. Do not chase trades if the analyst thesis is weak or has divergence.
-- Resolve conflicts: if price bias is bullish but volume is weak/divergent, lean toward 'flat'.
-- Do NOT compute raw stop/take-profit prices; SELECT the qualitative strategy using the rules below.
-
-=== HOUSE METHODOLOGY (apply exactly) ===
-Compute proximity from the current price and the analyst's S/R levels. A level is
-"near" when it is within 2% of the current price.
-
-STOP-LOSS STRATEGY (stop_loss_strategy):
-- LONG entries:
-  - If nearest_support is near (within 2% BELOW price) -> "swing_low" (anchor the stop just under structure).
-  - Otherwise -> "1.5_atr".
-- SHORT entries:
-  - If nearest_resistance is near (within 2% ABOVE price) -> "tight_atr" (tight invalidation just above structure).
-  - Otherwise -> "1.5_atr".
-
-TAKE-PROFIT STRATEGY (take_profit_strategy):
-- LONG entries -> "next_resistance" (target the structural level above).
-- SHORT entries -> "3.0_atr" (measured move; there is no structural long target on a short).
-
-RISK/REWARD (risk_reward_ratio):
-- Target 2.0 (a 2:1 reward-to-risk). Use ~2.0 unless structure forces otherwise; never below 1.5.
-
-HOLD PERIOD (hold_period_bias):
-- This is a swing fund: default "medium" (3-7 days). Use "short" only for explicit
-  counter-trend reversal scalps; "long" only for high-confluence trend continuation.
-
-When action is "flat", the stop/take-profit/hold fields are not acted upon — still emit
-schema-valid placeholder values, but spend your reasoning on WHY no edge exists.
-
-Provide your output strictly matching the Pydantic JSON schema.
-"""
+        self.system_instruction = prompts.TRADER_SYSTEM.text
 
     @observe()
     def decide(
@@ -100,7 +58,7 @@ Provide your output strictly matching the Pydantic JSON schema.
         with propagate_attributes(
             trace_name=f"HeadTrader-decide-{symbol}",
             tags=[symbol],
-            metadata={"symbol": symbol}
+            metadata={"symbol": symbol, "prompt_version": prompts.TRADER_SYSTEM.stamp}
         ):
             precedent_block = ""
             if precedents:
@@ -140,6 +98,7 @@ Provide your output strictly matching the Pydantic JSON schema.
                     system_instruction=self.system_instruction,
                     prompt=prompt + extra,
                     response_schema=HeadTraderOutput,
+                    prompt_version=prompts.TRADER_SYSTEM.stamp,
                 )
 
             raw_output = _call_single()

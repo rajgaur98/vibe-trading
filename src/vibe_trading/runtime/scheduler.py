@@ -2,7 +2,6 @@ import os
 import time
 import logging
 from datetime import datetime, date
-import urllib.request
 import json
 from apscheduler.schedulers.blocking import BlockingScheduler
 from langfuse import observe, propagate_attributes
@@ -16,11 +15,13 @@ from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
 from vibe_trading.agents.trader import HeadTrader
 from vibe_trading.agents.client import LLMClient
 from vibe_trading.agents.cost import PostgresCostLogger, daily_summary, should_alarm, should_block_trading
+from vibe_trading.agents import prompts
 from vibe_trading.brokers.risk import RiskManager
 from vibe_trading.brokers.paper import PaperBroker
 from vibe_trading.brokers.coinbase import CoinbaseBroker
 from vibe_trading.brokers.binance_futures import BinanceFuturesBroker
 from vibe_trading.runtime.decision_pipeline import DecisionPipeline
+from vibe_trading.runtime import monitoring
 
 logger = logging.getLogger(__name__)
 
@@ -204,11 +205,12 @@ class TradingScheduler:
                     self.pg_db.connect()
                     try:
                         self.pg_db.conn.execute("""
-                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id, prompt_version, precedents_k)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
                               proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
-                              proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id))
+                              proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id,
+                              prompts.bundle_version(), result.precedents_k))
                         # Persist the setup embedding (journal RAG) on the same connection, so
                         # this decision becomes a future precedent once its outcome lands.
                         journal.persist_embedding(
@@ -449,18 +451,4 @@ class TradingScheduler:
 
     def _send_discord_alert(self, message: str):
         """Sends an alert to Discord webhook if configured."""
-        webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-        if not webhook_url or "your_discord_webhook_url" in webhook_url:
-            return
-            
-        data = json.dumps({"content": message}).encode('utf-8')
-        req = urllib.request.Request(
-            webhook_url, 
-            data=data, 
-            headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
-        )
-        try:
-            with urllib.request.urlopen(req) as response:
-                pass
-        except Exception as e:
-            logger.error(f"Failed to send Discord alert: {e}")
+        monitoring.send_discord(message)

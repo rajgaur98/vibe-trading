@@ -224,6 +224,14 @@ Every field uses `Literal` types (for categoricals) or `float` with doc descript
 Structural output is enforced via `response_format=<ModelClass>` in `litellm.completion`,
 which maps to OpenAI's structured-output API on supported models.
 
+### Prompt Versioning
+
+All prompts are registry-owned and stamped end-to-end: every LLM call records its prompt
+version in the cost log, every decision records the prompt bundle in the decision log, and
+eval baselines are annotated with their `prompt_versions` map so prompt-impact diffs are
+reviewable in PRs. See the README's [Prompt versioning](#prompt-versioning) section for the
+safe change workflow.
+
 ---
 
 ## 3. Multi-Provider LLM Client (`agents/client.py`)
@@ -324,6 +332,49 @@ Support/resistance via `scipy.signal.find_peaks` on highs/lows with `distance=10
 and `prominence=1%` of mean.
 Candlestick patterns via TA-Lib: CDLENGULFING, CDLMORNINGSTAR, CDLEVENINGSTAR,
 CDLHAMMER, CDLSHOOTINGSTAR.
+
+### Trade-Journal RAG (`journal.py`) — decision memory
+
+Before the trader decides, the bot embeds the current setup card (analyst thesis + regime
+labels, `build_setup_card()`) and retrieves the top-`k` most similar past decisions
+(`PrecedentRetriever`) as precedent, each annotated with its real outcome (closed trades) or a
+counterfactual forward return (FLAT/risk-vetoed decisions, from the DuckDB candle cache).
+Embeddings are persisted to Postgres `decision_embeddings`, keyed by `decision_id`.
+
+- **SQL-ranked retrieval when pgvector is available.** `PostgresDatabase` probes the `vector`
+  extension on first connect and, if present, migrates `decision_embeddings.embedding` from
+  `float8[]` to `vector(EMBEDDING_DIM)` (`pgvector_migration_statements()`), setting the
+  class-level `pgvector_enabled` / `pgvector_halfvec` flags from the observed post-migration
+  state (never assumed). When enabled, `PrecedentRetriever` ranks top-k **in SQL**
+  (`journal.pgvector_topk_sql`) instead of pulling every candidate row into Python for a NumPy
+  cosine scan. Where pgvector is unavailable or migration fails, retrieval **automatically
+  falls back** to the original in-Python cosine path — no config flag, no behavior change
+  beyond ranking location — and both paths are asserted to return identical top-k
+  (`tests/test_pgvector_integration.py`, env-gated, `RUN_PG_INTEGRATION=1`).
+- **halfvec expression index.** `gemini-embedding-001` is 3072-dimensional, but pgvector's HNSW
+  index on plain `vector` caps at 2000 dims. The index is therefore built on a `halfvec` cast
+  expression (`(embedding::halfvec(dim)) halfvec_cosine_ops`), and every query must cast through
+  the byte-identical expression to hit it — `pgvector_topk_sql()` and
+  `pgvector_migration_statements()` are tested against each other to keep the cast in sync.
+- **`ReplayJournal` for backtests.** `backtest --journal-rag` (requires `--live-agents`) swaps
+  in an in-memory `ReplayJournal` that accumulates decisions as the replay advances and only
+  offers one as a precedent once it is older than the counterfactual horizon *relative to the
+  replay clock* (`current_ts`), with its counterfactual candle bounded by `not_after=current_ts`
+  — so a data gap can never leak a future price into a past decision's prompt. `--summary-out`
+  writes the run summary as JSON for A/B diffing against a `--journal-rag`-disabled run.
+- **`precedents_k` segmentation.** Each decision stamps how many precedents it actually saw
+  onto `decision_log.precedents_k`, copied through to `decision_scores.precedents_k` at
+  scoring time (the decision row is the source of truth). This lets online eval scores be
+  segmented by `precedents_k > 0` to measure the live effect of journal RAG without a
+  controlled backtest.
+- **Reranking is deferred.** A two-stage retrieve-then-rerank pipeline (spec workstream D4) is
+  **deferred until the retrieval eval (`evals/retrieval_eval.py`, recall@k / MRR against
+  `evals/retrieval-baseline.json`) shows recall headroom at k** — i.e. until first-stage
+  cosine/pgvector ranking is demonstrably leaving relevant precedents outside the top-k that a
+  reranker could recover.
+- **Fail-soft and eval-isolated**, same as the rest of the journal: any embed/retrieval/outcome
+  error degrades to "no precedents"; the offline eval harness uses a no-op retriever so the
+  committed regression baseline is unaffected.
 
 ---
 
@@ -562,10 +613,13 @@ Live Coinbase trading is gated behind `TRADING_MODE=LIVE_SANDBOX`, which swaps
 | `src/vibe_trading/data/db.py` | Database (DuckDB), PostgresDatabase, dialect translation |
 | `src/vibe_trading/data/fetcher.py` | DataFetcher — CCXT Binance, CoinGecko |
 | `src/vibe_trading/features/pipeline.py` | FeaturePipeline — TA-Lib, scipy S/R, candlestick |
+| `src/vibe_trading/journal.py` | PrecedentRetriever, ReplayJournal, pgvector_topk_sql |
 | `src/vibe_trading/eval/eval.py` | Eval CLI entry point, parallel runner |
 | `src/vibe_trading/eval/runner.py` | run_case(), EvalCase / CaseResult models |
 | `src/vibe_trading/eval/scorer.py` | Deterministic + LLM-as-judge scoring |
 | `src/vibe_trading/web/main.py` | FastAPI REST endpoints |
 | `evals/snapshots/` | 34 golden-set YAML cases |
 | `evals/baseline.json` | Committed regression yardstick (overall 0.788, tool-loop, 34 cases) |
+| `evals/retrieval_eval.py` | Journal-RAG retrieval eval — recall@k / MRR vs `evals/retrieval-baseline.json` |
+| `tests/test_pgvector_integration.py` | Env-gated (`RUN_PG_INTEGRATION=1`) SQL-vs-Python top-k parity check |
 | `docker-compose.yml` | Service definitions and port mappings |

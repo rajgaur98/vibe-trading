@@ -5,8 +5,46 @@ from pathlib import Path
 import logging
 import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# Dimensionality of journal embeddings (gemini/gemini-embedding-001 = 3072).
+# Drives the pgvector column typmod, query casts, and index DDL.
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "3072"))
+
+
+def resolve_embedding_dim(existing_len, env_dim: int) -> int:
+    """The dim the migration must use: existing rows win (migrating a live table
+    to the wrong typmod would corrupt it); env is the cold-start default."""
+    if existing_len:
+        return int(existing_len)
+    if env_dim <= 0:
+        raise ValueError(f"EMBEDDING_DIM must be positive, got {env_dim}")
+    return env_dim
+
+
+def pgvector_migration_statements(dim: int) -> list:
+    """DDL to move decision_embeddings.embedding from float8[] to vector(dim) and
+    index it. The index is pgvector's documented halfvec EXPRESSION form because
+    HNSW on plain vector caps at 2000 dims (ours is 3072). Queries must use the
+    byte-identical cast expression to hit the index (see journal.pgvector_topk_sql)."""
+    return [
+        f"ALTER TABLE decision_embeddings "
+        f"ALTER COLUMN embedding TYPE vector({dim}) USING embedding::vector({dim})",
+        f"CREATE INDEX IF NOT EXISTS decision_embeddings_embedding_hnsw "
+        f"ON decision_embeddings "
+        f"USING hnsw ((embedding::halfvec({dim})) halfvec_cosine_ops)",
+    ]
+
+
+def adapt_embedding(vec):
+    """Adapt a Python list embedding for the active decision_embeddings column type:
+    float32 ndarray when pgvector is registered (the pgvector psycopg2 adapter
+    serializes ndarrays to vector literals), plain list for the float8[] fallback."""
+    if PostgresDatabase.pgvector_enabled:
+        return np.asarray(vec, dtype=np.float32)
+    return list(vec)
 
 class Database:
     def __init__(self, db_path: str = None, read_only: bool = False):
@@ -133,7 +171,9 @@ class Database:
                 risk_reward_ratio DOUBLE,
                 reasoning_summary VARCHAR,
                 agent_transcripts VARCHAR, -- JSON string of the agent reasoning transcripts
-                trace_id VARCHAR -- Langfuse trace id (join a decision to its trace)
+                trace_id VARCHAR, -- Langfuse trace id (join a decision to its trace)
+                prompt_version VARCHAR, -- prompts.bundle_version() at decision time
+                precedents_k INTEGER -- how many journal precedents the trader saw
             )
         """)
 
@@ -166,6 +206,8 @@ class Database:
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
             "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR",
             "ALTER TABLE open_positions ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
+            "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
+            "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS precedents_k INTEGER",
         ):
             try:
                 self.conn.execute(stmt)
@@ -187,6 +229,10 @@ def translate_query(sql: str) -> str:
     elif "INSERT OR IGNORE INTO llm_cost_log" in sql:
         sql = sql.replace("INSERT OR IGNORE INTO llm_cost_log", "INSERT INTO llm_cost_log")
         sql += " ON CONFLICT (call_id) DO NOTHING"
+    elif "INSERT OR IGNORE INTO decision_scores" in sql:
+        sql = sql.replace("INSERT OR IGNORE INTO decision_scores",
+                          "INSERT INTO decision_scores")
+        sql += " ON CONFLICT (decision_id) DO NOTHING"
     elif "INSERT OR REPLACE INTO open_positions" in sql:
         sql = sql.replace("INSERT OR REPLACE INTO open_positions", "INSERT INTO open_positions")
         sql += """ ON CONFLICT (symbol) DO UPDATE SET
@@ -245,6 +291,8 @@ class PostgresConnectionWrapper:
 class PostgresDatabase:
     """Manages thread-safe connection pool to Supabase Postgres."""
     _pool = None
+    pgvector_enabled = False   # extension present + column migrated to vector
+    pgvector_halfvec = False   # halfvec type available (pgvector >= 0.7) -> HNSW index built
 
     def __init__(self, db_url: str = None):
         if not db_url:
@@ -274,6 +322,12 @@ class PostgresDatabase:
             try:
                 raw_conn = PostgresDatabase._pool.getconn()
                 self.conn = PostgresConnectionWrapper(raw_conn)
+                if PostgresDatabase.pgvector_enabled:
+                    try:
+                        from pgvector.psycopg2 import register_vector
+                        register_vector(raw_conn)  # idempotent per connection
+                    except Exception as e:
+                        logger.warning(f"pgvector register_vector failed (non-fatal): {e}")
                 logger.info("Acquired connection from Postgres pool.")
             except Exception as e:
                 logger.error(f"Failed to get connection from pool: {e}")
@@ -349,7 +403,9 @@ class PostgresDatabase:
                     risk_reward_ratio DOUBLE PRECISION,
                     reasoning_summary TEXT,
                     agent_transcripts TEXT,
-                    trace_id VARCHAR
+                    trace_id VARCHAR,
+                    prompt_version VARCHAR, -- prompts.bundle_version() at decision time
+                    precedents_k INTEGER -- how many journal precedents the trader saw
                 )
             """)
             self.conn.execute("""
@@ -366,7 +422,8 @@ class PostgresDatabase:
                     latency_ms DOUBLE PRECISION,
                     cache_read_tokens INTEGER,
                     cache_write_tokens INTEGER,
-                    schema_ok BOOLEAN
+                    schema_ok BOOLEAN,
+                    prompt_version VARCHAR
                 )
             """)
             self.conn.execute("""
@@ -380,6 +437,23 @@ class PostgresDatabase:
                     embedding DOUBLE PRECISION[]
                 )
             """)
+            # Online-eval scores: one row per scored decision (see eval/online.py).
+            # outcome_* is deterministic (PnL / counterfactual forward return);
+            # judge_* is the sampled generic-rubric LLM judge, filled in later.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS decision_scores (
+                    decision_id VARCHAR PRIMARY KEY,
+                    scored_at TIMESTAMP,
+                    kind VARCHAR,                    -- 'closed' | 'counterfactual'
+                    outcome_pct DOUBLE PRECISION,    -- signed % in the decision's favor (raw move for flat)
+                    outcome_score DOUBLE PRECISION,  -- [0,1]
+                    judge_score DOUBLE PRECISION,    -- [0,1], NULL until sampled
+                    judge_note TEXT,
+                    judged_at TIMESTAMP,
+                    prompt_version VARCHAR,          -- copied from decision_log at scoring time
+                    precedents_k INTEGER             -- how many journal precedents the trader saw
+                )
+            """)
             # Idempotent column migrations for pre-existing Supabase tables.
             for stmt in (
                 "ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
@@ -388,8 +462,15 @@ class PostgresDatabase:
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER",
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER",
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS schema_ok BOOLEAN",
+                "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
+                "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
+                "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS precedents_k INTEGER",
+                "ALTER TABLE decision_scores ADD COLUMN IF NOT EXISTS precedents_k INTEGER",
             ):
                 self.conn.execute(stmt)
+
+            self._enable_pgvector()
+
             self.conn.commit()
             logger.info("Supabase Postgres tables verified successfully.")
         except Exception as e:
@@ -401,4 +482,79 @@ class PostgresDatabase:
             raise
         finally:
             self.close()
+
+    def _get_embedding_column_udt(self):
+        """Re-queries decision_embeddings.embedding's underlying type. Returns
+        'vector' once migrated, '_float8' (or None if the table/column is
+        somehow missing) otherwise. Always re-read from the catalog rather than
+        assumed, so pgvector_enabled reflects reality even if a migration
+        attempt partially failed."""
+        row = self.conn.execute(
+            "SELECT udt_name FROM information_schema.columns "
+            "WHERE table_name = 'decision_embeddings' "
+            "AND column_name = 'embedding'").fetchone()
+        return row[0] if row else None
+
+    def _enable_pgvector(self):
+        """Fail-soft pgvector capability probe + one-time column migration.
+        See docs/superpowers/plans/2026-07-05-retrieval-upgrade.md (Task D1)
+        for the design. This method must NEVER raise — no code path may
+        REQUIRE pgvector; on any unexpected failure we log a warning and the
+        in-Python float8[] fallback (adapt_embedding / cosine_topk) is used.
+
+        The column ALTER and the HNSW index CREATE are deliberately split into
+        separate transactions: the column migration is committed immediately
+        on success, so a subsequent index-build failure (e.g. pgvector < 0.7
+        has no `halfvec` type) only rolls back the index attempt, not the
+        already-successful column migration.
+        """
+        try:
+            try:
+                self.conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()  # no privilege / no extension -> fallback path
+
+            ext = self.conn.execute(
+                "SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone()
+            if not ext:
+                logger.info("pgvector extension not present — using in-Python retrieval.")
+                return
+
+            col_udt = self._get_embedding_column_udt()
+            if col_udt == "_float8":  # still float8[] -> migrate once
+                row = self.conn.execute(
+                    "SELECT array_length(embedding, 1) FROM decision_embeddings "
+                    "LIMIT 1").fetchone()
+                dim = resolve_embedding_dim(row[0] if row else None, EMBEDDING_DIM)
+                alter_stmt, index_stmt = pgvector_migration_statements(dim)
+                try:
+                    self.conn.execute(alter_stmt)
+                    self.conn.commit()  # lock in the column migration independently
+                    col_udt = self._get_embedding_column_udt()
+                except Exception as e:
+                    logger.warning(f"pgvector column migration failed: {e}")
+                    self.conn.rollback()
+                    col_udt = self._get_embedding_column_udt()
+
+                if col_udt == "vector":
+                    try:
+                        self.conn.execute(index_stmt)
+                        self.conn.commit()
+                    except Exception as e:
+                        # HNSW build may fail on pgvector < 0.7 (no halfvec type);
+                        # the already-committed column migration is unaffected.
+                        logger.warning(f"pgvector HNSW index build skipped: {e}")
+                        self.conn.rollback()
+
+            PostgresDatabase.pgvector_enabled = (col_udt == "vector")
+            half = self.conn.execute(
+                "SELECT 1 FROM pg_type WHERE typname = 'halfvec'").fetchone()
+            PostgresDatabase.pgvector_halfvec = bool(half)
+            logger.info(
+                f"pgvector enabled={PostgresDatabase.pgvector_enabled} "
+                f"halfvec={PostgresDatabase.pgvector_halfvec}."
+            )
+        except Exception as e:
+            logger.warning(f"pgvector probe failed — using in-Python retrieval: {e}")
 

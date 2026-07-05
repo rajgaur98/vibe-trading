@@ -325,6 +325,57 @@ fresh checkout, run with `--update-baseline` once. If your provider has a tight
 **token** cap (e.g. Groq's TPD), prefer Gemma; if it has a tight **request** cap,
 raise `--throttle-seconds` so the per-minute bucket has time to refill.
 
+### Model benchmark matrix
+
+Run the full golden-set suite across several models and compare quality vs cost:
+
+    EVAL_JUDGE_MODEL=gemini-3.1-flash-lite \
+    python -m vibe_trading.eval.benchmark \
+      --models "gemini/gemini-3.1-flash-lite,gemini/gemma-4-31b-it" \
+      --throttle-seconds 4.5
+
+- `EVAL_JUDGE_MODEL` is **required** (and pinned for the whole run) so every model
+  is graded by the same judge — the scorer's per-run fallback would otherwise let
+  each contestant grade its own homework.
+- The judge must be hosted by the ambient `LLM_PROVIDER` at launch.
+- Results: a timestamped JSON report under `data/reports/` and a regenerated
+  [evals/BENCHMARK.md](evals/BENCHMARK.md) table (sorted by score-per-dollar).
+- The committed regression baseline (`evals/baseline.json`) is never touched.
+
+### Prompt versioning
+
+All system prompts live in `src/vibe_trading/agents/prompts.py` as versioned,
+content-hashed `PromptSpec`s. Every LLM call records its prompt stamp
+(`name:vN@sha12`) in `llm_cost_log.prompt_version`; every decision records the
+full bundle in `decision_log.prompt_version`; every eval report and the committed
+baseline record the `prompt_versions` map.
+
+Changing a prompt:
+
+1. Edit the text in `prompts.py` **and bump its `version`** — an unbumped edit
+   fails `tests/test_prompts.py`.
+2. Regenerate pins:
+   `python -m vibe_trading.agents.prompts --write-pins tests/fixtures/prompt_pins.json`
+3. Run the eval regression gate (`python -m vibe_trading.eval.eval`); re-seed via
+   `--update-baseline` only for a reviewed, intentional change.
+
+### Online evaluation
+
+Live decisions are scored once their outcome is knowable — realized PnL for
+decisions that became trades, counterfactual forward return (24h) for flat or
+risk-rejected ones — and a capped daily sample gets a generic-rubric LLM judge
+(groundedness + consistency vs the stored feature snapshot). Scores land in the
+`decision_scores` table and on each decision's Langfuse trace
+(`outcome_score`, `online_judge_score`).
+
+    python -m vibe_trading.eval.online              # score + judge (cap: ONLINE_JUDGE_DAILY_CAP, default 5)
+    python -m vibe_trading.eval.online --no-judge   # deterministic scoring only
+    python -m vibe_trading.eval.online --digest     # + weekly drift digest to Discord (cron weekly)
+
+`trade-once` runs a best-effort scoring pass automatically after each window.
+Judge calls are tagged `call_type="online_judge"` in `llm_cost_log` and respect
+`LLM_DAILY_COST_CAP_USD`.
+
 ## Cost Tracking
 
 Every LLM call's tokens, dollar cost, and latency are logged to the `llm_cost_log`
@@ -349,8 +400,8 @@ Cost tracking itself is observational — a logging failure never interrupts a t
 ## Trade-Journal RAG (decision memory)
 
 Before the Head Trader decides, the bot embeds the current **setup card** (analyst thesis +
-regime labels) with Gemini (`gemini-embedding-001`), cosine-ranks its **past** decisions
-in-memory, and injects the top-k similar setups + their outcomes into the trader's prompt as
+regime labels) with Gemini (`gemini-embedding-001`), ranks its **past** decisions by cosine
+similarity, and injects the top-k similar setups + their outcomes into the trader's prompt as
 precedent — closed trades show the real PnL (joined `decision_id`→`trades`), while FLAT/risk-
 rejected decisions show a **counterfactual** forward return over the next 24h (from the candle
 cache). Each decision's setup embedding is persisted to `decision_embeddings` (keyed by
@@ -363,3 +414,66 @@ cache). Each decision's setup embedding is persisted to `decision_embeddings` (k
 - **Eval-isolated:** the eval uses a no-op retriever, so the committed regression baseline is
   unaffected (precedents are a live-only augmentation).
 
+### SQL-ranked retrieval (pgvector) with automatic fallback
+
+On a Supabase/pgvector-capable Postgres, `PostgresDatabase()` probes the `vector` extension on
+first connect and, if present, one-time-migrates `decision_embeddings.embedding` from
+`float8[]` to `vector(EMBEDDING_DIM)` and builds a `halfvec` expression HNSW index
+(`decision_embeddings_embedding_hnsw`) — plain-`vector` HNSW caps at 2000 dimensions and
+`gemini-embedding-001` is 3072, so the index (and every query) casts through `halfvec` instead.
+Once `PostgresDatabase.pgvector_enabled` is true, `PrecedentRetriever` ranks top-k **in SQL**
+(`journal.pgvector_topk_sql`) instead of pulling every candidate into Python for a NumPy cosine
+scan. If the extension or migration isn't available, retrieval falls back to the original
+in-Python path automatically — no config flag needed, and both paths return the same ranking
+(see `tests/test_pgvector_integration.py`).
+
+- `EMBEDDING_DIM` (default `3072`) sizes the pgvector column/index/query casts. On a fresh DB
+  it's the cold-start dimension; on a DB with existing rows, the existing row length wins (a
+  migration always keeps the table internally consistent — see `resolve_embedding_dim()`).
+- Set `POSTGRES_URL` to a non-pgvector Postgres (or omit the extension) to stay on the
+  in-Python fallback path indefinitely — nothing else changes.
+
+### Retrieval quality eval
+
+`evals/retrieval_eval.py` scores the production ranking (embed + cosine) against hand-labeled
+relevance judgments in `evals/retrieval/queries.yaml`, over a corpus exported from prod via
+`evals/export_retrieval_corpus.py`:
+
+```bash
+# Score against the committed baseline; non-zero exit on a recall@k regression
+python evals/retrieval_eval.py
+
+# Re-export the candidate corpus from prod decision_embeddings first, if it's gone stale
+python evals/export_retrieval_corpus.py
+
+# After a deliberate, reviewed change to retrieval (embedding model, k, ranking):
+python evals/retrieval_eval.py --update-baseline
+```
+
+Reports recall@k and MRR (`--k`, default 4 = `JOURNAL_PRECEDENT_K`); embeddings are cached in
+`data/retrieval_embedding_cache.json` (keyed by `sha256` of the setup text) so re-runs are free.
+The regression yardstick is `evals/retrieval-baseline.json` — seed it once with
+`--update-baseline` on a fresh checkout.
+
+### Backtest A/B (journal RAG on vs off)
+
+`backtest --journal-rag` (requires `--live-agents`) wires up a `ReplayJournal` — an in-memory,
+no-lookahead journal that only offers a past decision as a precedent once it is older than the
+counterfactual horizon *relative to the replay clock*, so backtests can never leak a future
+outcome into a past decision's prompt. Pair it with `--summary-out` to diff two runs:
+
+```bash
+uv run python -m vibe_trading.cli backtest --symbols BTC/USDT ETH/USDT \
+    --start 2026-05-01 --end 2026-06-01 \
+    --live-agents --summary-out data/reports/ab_no_rag.json
+
+uv run python -m vibe_trading.cli backtest --symbols BTC/USDT ETH/USDT \
+    --start 2026-05-01 --end 2026-06-01 \
+    --live-agents --journal-rag --summary-out data/reports/ab_rag.json
+
+diff data/reports/ab_no_rag.json data/reports/ab_rag.json
+```
+
+Live-side, `decision_log.precedents_k` (copied through to `decision_scores`) records how many
+precedents each decision actually saw, so online eval scores can be segmented by
+`precedents_k > 0` to measure the effect outside of a controlled backtest.

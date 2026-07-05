@@ -87,3 +87,24 @@ def test_decision_embeddings_table_in_schema():
     assert "decision_embeddings" in src
     for col in ("decision_id", "symbol", "embedding"):
         assert col in src
+
+
+def test_duckdb_decision_log_has_prompt_version(tmp_path):
+    from vibe_trading.data.db import Database
+    db = Database(db_path=str(tmp_path / "t.db"))
+    db.connect()
+    try:
+        cols = [r[1] for r in db.conn.execute(
+            "PRAGMA table_info('decision_log')").fetchall()]
+        assert "prompt_version" in cols
+    finally:
+        db.close()
+
+
+def test_translate_query_maps_decision_scores_insert_or_ignore():
+    from vibe_trading.data.db import translate_query
+    sql = translate_query(
+        "INSERT OR IGNORE INTO decision_scores (decision_id) VALUES (?)")
+    assert "INSERT INTO decision_scores" in sql
+    assert "ON CONFLICT (decision_id) DO NOTHING" in sql
+    assert "?" not in sql and "%s" in sql

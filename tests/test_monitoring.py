@@ -34,3 +34,27 @@ def test_ping_swallows_network_errors(monkeypatch):
     get = MagicMock(side_effect=Exception("timeout"))
     monkeypatch.setattr(monitoring.requests, "get", get)
     monitoring.ping_healthcheck(success=True)  # must not raise
+
+
+def test_send_discord_posts_when_configured(monkeypatch):
+    import urllib.request
+    from vibe_trading.runtime import monitoring
+    sent = {}
+    monkeypatch.setenv("DISCORD_WEBHOOK_URL", "https://discord.test/hook")
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    def fake_urlopen(req):
+        sent["url"] = req.full_url
+        sent["data"] = req.data
+        return FakeResp()
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monitoring.send_discord("hello")
+    assert sent["url"] == "https://discord.test/hook"
+    assert b"hello" in sent["data"]
+
+
+def test_send_discord_noop_without_webhook(monkeypatch):
+    from vibe_trading.runtime import monitoring
+    monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+    monitoring.send_discord("hello")  # must not raise

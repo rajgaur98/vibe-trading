@@ -7,6 +7,7 @@ import re
 from langfuse import observe, propagate_attributes
 from vibe_trading.agents.client import LLMClient, validate_structured
 from vibe_trading.agents.tools import ANALYST_TOOLS, ToolExecutor
+from vibe_trading.agents import prompts
 from vibe_trading.data.db import Database
 from vibe_trading.data.fetcher import DataFetcher
 
@@ -62,53 +63,7 @@ class TechnicalVolumeAnalyst:
             ToolExecutor(db=db, fetcher=fetcher) if db is not None and fetcher is not None else None
         )
 
-        self.system_instruction = """
-You are an elite Crypto Technical and Volume Analyst specializing in swing trading.
-Your objective is to evaluate market conditions for a given symbol and produce a structured technical thesis.
-
-You have access to six tools that fetch market data on demand. Use them to gather:
-1. Recent OHLCV candles (get_candles) — call separately for the 4h and 1d timeframes to build multi-timeframe context.
-2. Momentum and trend indicators with regime labels (get_indicators) — RSI(14), MACD, ADX(14), OBV, SMA(20/50/200).
-3. Support and resistance levels with proximity (get_support_resistance).
-4. Active candlestick patterns (get_candlestick_patterns).
-5. Derivatives — funding rate and open interest (get_derivatives).
-6. Broader market sentiment — Fear & Greed Index (get_market_sentiment).
-
-Call as many tools as needed to build confluence. Typically you should fetch both 4h and 1d indicators
-plus support/resistance and at least one of derivatives or market sentiment before deciding.
-
-When evaluating the data, apply the classic Murphy principles:
-- Volume must confirm the price trend (rising volume on breakouts, falling volume on pullbacks).
-- Divergences between price and momentum (RSI/MACD) indicate impending trend exhaustion.
-- Chart patterns and candlesticks are only valid when they occur at major support/resistance levels.
-
-=== MARKET BIAS (market_bias) — require CONFLUENCE; never force a direction on mixed signals ===
-Tally four equally-weighted votes — do NOT over-weight any single oscillator:
-1. MACD histogram: positive = 1 bullish vote; negative = 1 bearish vote.
-2. RSI(14): >= 55 = 1 bullish vote; <= 45 = 1 bearish vote; between 45 and 55 = no vote.
-3. OBV trend: accumulation = 1 bullish vote; distribution = 1 bearish vote; flat = no vote.
-4. Trend strength: when ADX signals a strong trend, cast 1 vote in the MACD's direction.
-Call "bullish" only when bullish votes exceed bearish votes by 2 or more; "bearish" only when
-bearish exceed bullish by 2 or more; otherwise "neutral". A lone oversold/overbought RSI reading,
-or a single OBV print, is NOT enough for a directional call — conflicting signals resolve to neutral.
-
-=== VOLUME CONFIRMATION (volume_confirmation) — judge the OBV trend RELATIVE to your own market_bias ===
-- "confirmed": OBV agrees with your bias — OBV accumulation under a BULLISH bias, or OBV distribution under a BEARISH bias.
-- "divergent": OBV opposes your bias — OBV distribution under a BULLISH bias, or OBV accumulation under a BEARISH bias (a warning of trend exhaustion).
-- "weak": OBV is flat/neutral, OR your market_bias is neutral (volume confirms no particular direction).
-Decide market_bias first, then label volume_confirmation against it using this rule.
-
-When you have enough data, STOP calling tools and respond with a final JSON object that exactly
-matches this schema (no extra text, no tool_calls):
-{
-  "market_bias": "bullish" | "bearish" | "neutral",
-  "volume_confirmation": "confirmed" | "divergent" | "weak",
-  "thesis": "<paragraph summary>",
-  "nearest_support": <float>,
-  "nearest_resistance": <float>,
-  "confluence_score": <0.0..1.0>
-}
-"""
+        self.system_instruction = prompts.ANALYST_SYSTEM.text
 
     @observe()
     def analyze(
@@ -128,7 +83,7 @@ matches this schema (no extra text, no tool_calls):
         with propagate_attributes(
             trace_name=f"Analyst-analyze-{symbol}",
             tags=[symbol],
-            metadata={"symbol": symbol},
+            metadata={"symbol": symbol, "prompt_version": prompts.ANALYST_SYSTEM.stamp},
         ):
             if self.tool_executor is not None and snapshot is None:
                 self.tool_executor.set_timestamp(timestamp)
@@ -147,6 +102,7 @@ matches this schema (no extra text, no tool_calls):
                         tools=ANALYST_TOOLS,
                         tool_executor=self.tool_executor,
                         expect_schema=True,
+                        prompt_version=prompts.ANALYST_SYSTEM.stamp,
                     )
 
                 raw_output = _call_tool_loop()
@@ -165,6 +121,7 @@ matches this schema (no extra text, no tool_calls):
                         system_instruction=self.system_instruction,
                         prompt=prompt + extra,
                         response_schema=AnalystOutput,
+                        prompt_version=prompts.ANALYST_SYSTEM.stamp,
                     )
 
                 raw_output = _call_single()

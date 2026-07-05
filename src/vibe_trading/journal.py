@@ -6,6 +6,8 @@ from typing import Optional
 
 import litellm
 
+from vibe_trading.data.db import adapt_embedding, EMBEDDING_DIM
+
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
@@ -67,6 +69,24 @@ def cosine_topk(query, candidates, k):
     return scored[:k]
 
 
+def pgvector_topk_sql(halfvec: bool, dim: int) -> str:
+    """Top-k cosine retrieval in SQL. With halfvec=True the cast expression is
+    byte-identical to the HNSW expression index (db.pgvector_migration_statements)
+    so the planner can use it; without halfvec it is a correct (unindexed) scan
+    on the vector column. Params: (query, cutoff, query, k)."""
+    if halfvec:
+        col = f"embedding::halfvec({dim})"
+        q = f"?::halfvec({dim})"
+    else:
+        col, q = "embedding", "?"
+    return (
+        "SELECT decision_id, symbol, timestamp, action, entry_price, "
+        f"1 - ({col} <=> {q}) AS similarity "
+        "FROM decision_embeddings WHERE timestamp < ? "
+        f"ORDER BY {col} <=> {q} LIMIT ?"
+    )
+
+
 def embed(text: str, model: str = None) -> Optional[list]:
     """Embed `text` via LiteLLM (Gemini by default). Returns the vector, or None on any
     error (rate limit, network, bad model) — retrieval then degrades to no precedents."""
@@ -90,7 +110,8 @@ def persist_embedding(conn, decision_id, symbol, timestamp, action, entry_price,
             "INSERT INTO decision_embeddings "
             "(decision_id, symbol, timestamp, action, entry_price, setup_text, embedding) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (decision_id, symbol, timestamp, action, entry_price, setup_text, embedding),
+            (decision_id, symbol, timestamp, action, entry_price, setup_text,
+             adapt_embedding(embedding)),
         )
     except Exception as e:
         logger.error(f"journal persist_embedding failed (non-fatal): {e}")
@@ -109,13 +130,15 @@ class PrecedentRetriever:
     take top-k, attach each outcome. All DB access is fail-soft."""
 
     def __init__(self, k: int = PRECEDENT_K, horizon_candles: int = COUNTERFACTUAL_HORIZON_CANDLES,
-                 pg_factory=None, duck_factory=None, embed_fn=embed, now_fn=None):
+                 pg_factory=None, duck_factory=None, embed_fn=embed, now_fn=None,
+                 use_pgvector: Optional[bool] = None):
         self.k = k
         self.horizon_candles = horizon_candles
         self._embed = embed_fn
         self._now = now_fn or (lambda: datetime.utcnow())
         self._pg_factory = pg_factory
         self._duck_factory = duck_factory
+        self.use_pgvector = use_pgvector
 
     def _pg(self):
         if self._pg_factory:
@@ -142,14 +165,37 @@ class PrecedentRetriever:
 
     def retrieve(self, embedding) -> list:
         cutoff = self._now() - timedelta(hours=self.horizon_candles * _CANDLE_HOURS)
-        rows = self._load_candidates(cutoff)            # [(id, symbol, ts, action, entry, vector)]
-        ranked = cosine_topk(embedding, [(row, row[5]) for row in rows], self.k)
+        if self._pgvector_active():
+            ranked = self._load_topk_pgvector(embedding, cutoff)
+        else:
+            rows = self._load_candidates(cutoff)         # [(id, symbol, ts, action, entry, vector)]
+            ranked = cosine_topk(embedding, [(row, row[5]) for row in rows], self.k)
         out = []
         for row, score in ranked:
             p = self._attach_outcome(row, score)
             if p is not None:
                 out.append(p)
         return out
+
+    def _pgvector_active(self) -> bool:
+        if self.use_pgvector is not None:
+            return self.use_pgvector
+        from vibe_trading.data.db import PostgresDatabase
+        return PostgresDatabase.pgvector_enabled
+
+    def _load_topk_pgvector(self, embedding, cutoff):
+        """[(row, similarity)] where row matches _load_candidates' shape (vector
+        slot None — _attach_outcome never reads it)."""
+        from vibe_trading.data.db import PostgresDatabase
+        sql = pgvector_topk_sql(PostgresDatabase.pgvector_halfvec, EMBEDDING_DIM)
+        q = adapt_embedding(embedding)
+        pg = self._pg()
+        pg.connect()
+        try:
+            rows = pg.conn.execute(sql, (q, cutoff, q, self.k)).fetchall()
+        finally:
+            pg.close()
+        return [((r[0], r[1], r[2], r[3], r[4], None), float(r[5])) for r in rows]
 
     def _load_candidates(self, cutoff):
         pg = self._pg()
@@ -208,3 +254,78 @@ class PrecedentRetriever:
         else:
             label = f"{action} skipped (risk veto); would have {signed:+.1f}%"
         return Precedent(symbol, action, when, score, "counterfactual", signed, label)
+
+
+class ReplayJournal:
+    """Backtest-time journal RAG (spec D3): accumulates decisions during a
+    chronological replay and retrieves precedents with NO lookahead —
+      * a decision becomes a candidate only once it is older than the
+        counterfactual horizon relative to the replay clock (current_ts), and
+      * its counterfactual candle is bounded by not_after=current_ts, so a data
+        gap can never leak a future price into the replay past.
+    In-memory only; nothing is persisted."""
+
+    def __init__(self, k: int = PRECEDENT_K,
+                 horizon_candles: int = COUNTERFACTUAL_HORIZON_CANDLES,
+                 embed_fn=embed, candle_close_fn=None):
+        self.k = k
+        self.horizon_candles = horizon_candles
+        self._embed = embed_fn
+        # (symbol, target_ts, not_after_ts) -> first 4h close in [target, not_after]
+        self._candle_close = candle_close_fn
+        self.current_ts = None            # set by the engine each replay step
+        self._records: list = []          # dicts, insertion-ordered (chronological)
+        self._trades: dict = {}           # decision_id -> (result, pnl, size)
+
+    def record_decision(self, decision_id, symbol, ts, action, entry_price,
+                        embedding) -> None:
+        if embedding is None:
+            return
+        self._records.append({"decision_id": decision_id, "symbol": symbol,
+                              "ts": ts, "action": action,
+                              "entry_price": entry_price, "embedding": embedding})
+
+    def record_closed_trade(self, trade: dict) -> None:
+        decision_id = trade.get("decision_id")
+        if decision_id:
+            self._trades[decision_id] = (trade["result"], trade["realized_pnl"],
+                                         trade["size_usd"])
+
+    def retrieve_for(self, setup_text: str) -> RetrievalResult:
+        emb = self._embed(setup_text)
+        if emb is None or self.current_ts is None:
+            return RetrievalResult(emb, [])
+        horizon = timedelta(hours=self.horizon_candles * _CANDLE_HOURS)
+        cutoff = self.current_ts - horizon
+        candidates = [(r, r["embedding"]) for r in self._records if r["ts"] < cutoff]
+        ranked = cosine_topk(emb, candidates, self.k)
+        out = []
+        for rec, score in ranked:
+            p = self._attach(rec, score, horizon)
+            if p is not None:
+                out.append(p)
+        return RetrievalResult(emb, out)
+
+    def _attach(self, rec: dict, score: float, horizon) -> Optional[Precedent]:
+        when = rec["ts"].date().isoformat() if hasattr(rec["ts"], "date") else str(rec["ts"])
+        action = rec["action"]
+        trade = self._trades.get(rec["decision_id"])
+        if trade is not None:
+            result, pnl, size = trade
+            pct = (float(pnl) / float(size) * 100.0) if size else 0.0
+            return Precedent(rec["symbol"], action, when, score, "closed", pct,
+                             f"traded {action} -> {result} {pct:+.1f}%")
+        if not rec["entry_price"] or self._candle_close is None:
+            return None
+        fut = self._candle_close(rec["symbol"], rec["ts"] + horizon, self.current_ts)
+        if fut is None:
+            return None  # gap — drop, never fabricate (matches PrecedentRetriever)
+        fwd = (float(fut) - float(rec["entry_price"])) / float(rec["entry_price"]) * 100.0
+        signed = -fwd if action == "short" else fwd
+        if action == "flat":
+            label = (f"skipped (flat); price moved {fwd:+.1f}% over "
+                     f"{self.horizon_candles * _CANDLE_HOURS}h")
+        else:
+            label = f"{action} skipped (risk veto); would have {signed:+.1f}%"
+        return Precedent(rec["symbol"], action, when, score, "counterfactual",
+                         signed, label)

@@ -3,8 +3,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from vibe_trading.agents.prompts import versions_map
 from vibe_trading.eval.scorer import CaseScore
 
 
@@ -19,6 +20,9 @@ class SuiteReport(BaseModel):
     schema_failures: int
     judge_errors: int
     per_case: dict[str, CaseScore]
+    # {prompt_name: stamp} at run time — makes every report/baseline traceable to
+    # the exact prompt state it certified. Auto-captured; from_scores need not set it.
+    prompt_versions: dict[str, str] = Field(default_factory=versions_map)
 
     @classmethod
     def from_scores(cls, scores: list[CaseScore]) -> "SuiteReport":
@@ -104,6 +108,7 @@ def write_baseline(report: SuiteReport, baseline_path: Path) -> None:
         "trader_score": report.trader_score,
         "pass_rate": report.pass_rate,
         "schema_failures": report.schema_failures,
+        "prompt_versions": report.prompt_versions,
         "per_case": {
             cid: {
                 "total_score": cs.total_score,
