@@ -334,3 +334,61 @@ class OnlineJudge:
                 (score, note, self._now(), decision_id))
         finally:
             pg.close()
+
+
+def weekly_digest(conn, now: Optional[datetime] = None) -> dict:
+    """C3: this week's quality vs the trailing four weeks, plus schema compliance,
+    segmented by prompt bundle. `conn` is a connected DB wrapper (caller owns
+    connect/close)."""
+    now = now or datetime.utcnow()
+    week_start = now - timedelta(days=7)
+    trailing_start = now - timedelta(days=35)
+
+    week = conn.execute(
+        "SELECT AVG(outcome_score), AVG(judge_score), COUNT(*) "
+        "FROM decision_scores WHERE scored_at >= ?", (week_start,)).fetchone()
+    trailing = conn.execute(
+        "SELECT AVG(outcome_score) FROM decision_scores "
+        "WHERE scored_at >= ? AND scored_at < ?",
+        (trailing_start, week_start)).fetchone()
+    schema = conn.execute(
+        "SELECT COUNT(CASE WHEN schema_ok IS TRUE THEN 1 END), "
+        "       COUNT(CASE WHEN schema_ok IS NOT NULL THEN 1 END) "
+        "FROM llm_cost_log WHERE timestamp >= ?", (week_start,)).fetchone()
+    by_version = conn.execute(
+        "SELECT prompt_version, AVG(outcome_score), COUNT(*) "
+        "FROM decision_scores WHERE scored_at >= ? "
+        "GROUP BY prompt_version ORDER BY 3 DESC", (week_start,)).fetchall()
+
+    ok, total = int(schema[0] or 0), int(schema[1] or 0)
+    return {
+        "week_outcome_mean": float(week[0]) if week and week[0] is not None else None,
+        "week_judge_mean": float(week[1]) if week and week[1] is not None else None,
+        "week_scored": int(week[2] or 0) if week else 0,
+        "trailing_outcome_mean": (float(trailing[0])
+                                  if trailing and trailing[0] is not None else None),
+        "week_schema_compliance": (ok / total) if total else None,
+        "by_prompt_version": [
+            {"prompt_version": pv, "outcome_mean": float(m), "count": int(c)}
+            for (pv, m, c) in by_version
+        ],
+    }
+
+
+def _fmt(v: Optional[float]) -> str:
+    return f"{v:.2f}" if v is not None else "n/a"
+
+
+def format_digest(d: dict) -> str:
+    lines = [
+        "📈 **WEEKLY ONLINE-EVAL DIGEST**",
+        f"Outcome score (7d): **{_fmt(d['week_outcome_mean'])}** "
+        f"vs trailing 4w {_fmt(d['trailing_outcome_mean'])} "
+        f"({d['week_scored']} decisions scored)",
+        f"Judge score (7d): {_fmt(d['week_judge_mean'])}",
+        f"Schema compliance (7d): {_fmt(d['week_schema_compliance'])}",
+    ]
+    for row in d["by_prompt_version"]:
+        lines.append(f"  · `{row['prompt_version']}`: "
+                     f"{row['outcome_mean']:.2f} (n={row['count']})")
+    return "\n".join(lines)

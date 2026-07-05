@@ -188,3 +188,26 @@ def test_unparseable_verdict_is_skipped_not_raised():
     pg = _judge_pg([_row()])
     judge = OnlineJudge(client=client, pg_factory=lambda: pg)
     assert judge.run_pass() == 0  # no UPDATE, no exception
+
+
+from vibe_trading.eval.online import weekly_digest, format_digest
+
+
+def test_weekly_digest_aggregates_and_formats():
+    now = datetime(2026, 7, 5)
+    conn = MagicMock()
+    conn.execute.return_value.fetchone.side_effect = [
+        (0.62, 0.55, 14),    # week: outcome mean, judge mean, scored count
+        (0.58,),             # trailing 4 weeks: outcome mean
+        (48, 50),            # week schema: ok_true, ok_total
+    ]
+    conn.execute.return_value.fetchall.return_value = [
+        ("analyst_system:v1@a;trader_system:v1@b", 0.62, 14),
+    ]
+    d = weekly_digest(conn, now=now)
+    assert d["week_outcome_mean"] == pytest.approx(0.62)
+    assert d["trailing_outcome_mean"] == pytest.approx(0.58)
+    assert d["week_schema_compliance"] == pytest.approx(0.96)
+    text = format_digest(d)
+    assert "0.62" in text and "0.58" in text
+    assert "analyst_system:v1@a" in text

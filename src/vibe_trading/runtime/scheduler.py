@@ -22,6 +22,7 @@ from vibe_trading.brokers.paper import PaperBroker
 from vibe_trading.brokers.coinbase import CoinbaseBroker
 from vibe_trading.brokers.binance_futures import BinanceFuturesBroker
 from vibe_trading.runtime.decision_pipeline import DecisionPipeline
+from vibe_trading.runtime import monitoring
 
 logger = logging.getLogger(__name__)
 
@@ -451,18 +452,4 @@ class TradingScheduler:
 
     def _send_discord_alert(self, message: str):
         """Sends an alert to Discord webhook if configured."""
-        webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-        if not webhook_url or "your_discord_webhook_url" in webhook_url:
-            return
-            
-        data = json.dumps({"content": message}).encode('utf-8')
-        req = urllib.request.Request(
-            webhook_url, 
-            data=data, 
-            headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'}
-        )
-        try:
-            with urllib.request.urlopen(req) as response:
-                pass
-        except Exception as e:
-            logger.error(f"Failed to send Discord alert: {e}")
+        monitoring.send_discord(message)
