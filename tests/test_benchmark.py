@@ -1,3 +1,4 @@
+import os
 import threading
 from datetime import datetime
 
@@ -112,3 +113,29 @@ def test_write_benchmark_report_round_trips(tmp_path: Path):
     assert data["judge_model"] == "j-model"
     assert data["entries"][0]["model"] == "g/a"
     assert data["entries"][0]["score_per_dollar"] == pytest.approx(8.0)
+
+
+from vibe_trading.eval.benchmark import model_env
+
+
+def test_model_env_sets_and_restores(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("LLM_MODEL", "original-model")
+    monkeypatch.setenv("OPENAI_ANALYST_MODEL", "user-analyst-override")
+    with model_env("openai", "gpt-5.2-mini"):
+        assert os.environ["LLM_PROVIDER"] == "openai"
+        assert os.environ["LLM_MODEL"] == "gpt-5.2-mini"
+        # the override would silently reroute the analyst — must be neutralized
+        assert "OPENAI_ANALYST_MODEL" not in os.environ
+        assert "OPENAI_TRADER_MODEL" not in os.environ
+    assert os.environ["LLM_PROVIDER"] == "gemini"
+    assert os.environ["LLM_MODEL"] == "original-model"
+    assert os.environ["OPENAI_ANALYST_MODEL"] == "user-analyst-override"
+
+
+def test_model_env_restores_on_exception(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    with pytest.raises(RuntimeError):
+        with model_env("groq", "llama-4-70b"):
+            raise RuntimeError("boom")
+    assert os.environ["LLM_PROVIDER"] == "gemini"

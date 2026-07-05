@@ -154,3 +154,32 @@ def write_benchmark_report(entries: list[BenchmarkEntry], judge_model: str,
     }
     path.write_text(json.dumps(payload, indent=2, default=str))
     return path
+
+
+import contextlib
+import os
+
+
+@contextlib.contextmanager
+def model_env(provider: str, model: str):
+    """Point LLM_PROVIDER/LLM_MODEL at the benchmarked model and neutralize that
+    provider's per-agent overrides, restoring the prior environment on exit.
+    LLMClient instances constructed inside the block (one per run_case worker)
+    pick these up; instances constructed before (the judge) are unaffected."""
+    keys = [
+        "LLM_PROVIDER", "LLM_MODEL",
+        f"{provider.upper()}_ANALYST_MODEL", f"{provider.upper()}_TRADER_MODEL",
+    ]
+    saved = {k: os.environ.get(k) for k in keys}
+    os.environ["LLM_PROVIDER"] = provider
+    os.environ["LLM_MODEL"] = model
+    os.environ.pop(f"{provider.upper()}_ANALYST_MODEL", None)
+    os.environ.pop(f"{provider.upper()}_TRADER_MODEL", None)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
