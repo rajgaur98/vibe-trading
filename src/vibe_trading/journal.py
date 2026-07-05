@@ -6,6 +6,8 @@ from typing import Optional
 
 import litellm
 
+from vibe_trading.data.db import adapt_embedding, EMBEDDING_DIM
+
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini/gemini-embedding-001")
@@ -67,6 +69,24 @@ def cosine_topk(query, candidates, k):
     return scored[:k]
 
 
+def pgvector_topk_sql(halfvec: bool, dim: int) -> str:
+    """Top-k cosine retrieval in SQL. With halfvec=True the cast expression is
+    byte-identical to the HNSW expression index (db.pgvector_migration_statements)
+    so the planner can use it; without halfvec it is a correct (unindexed) scan
+    on the vector column. Params: (query, cutoff, query, k)."""
+    if halfvec:
+        col = f"embedding::halfvec({dim})"
+        q = f"?::halfvec({dim})"
+    else:
+        col, q = "embedding", "?"
+    return (
+        "SELECT decision_id, symbol, timestamp, action, entry_price, "
+        f"1 - ({col} <=> {q}) AS similarity "
+        "FROM decision_embeddings WHERE timestamp < ? "
+        f"ORDER BY {col} <=> {q} LIMIT ?"
+    )
+
+
 def embed(text: str, model: str = None) -> Optional[list]:
     """Embed `text` via LiteLLM (Gemini by default). Returns the vector, or None on any
     error (rate limit, network, bad model) — retrieval then degrades to no precedents."""
@@ -90,7 +110,8 @@ def persist_embedding(conn, decision_id, symbol, timestamp, action, entry_price,
             "INSERT INTO decision_embeddings "
             "(decision_id, symbol, timestamp, action, entry_price, setup_text, embedding) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (decision_id, symbol, timestamp, action, entry_price, setup_text, embedding),
+            (decision_id, symbol, timestamp, action, entry_price, setup_text,
+             adapt_embedding(embedding)),
         )
     except Exception as e:
         logger.error(f"journal persist_embedding failed (non-fatal): {e}")
@@ -109,13 +130,15 @@ class PrecedentRetriever:
     take top-k, attach each outcome. All DB access is fail-soft."""
 
     def __init__(self, k: int = PRECEDENT_K, horizon_candles: int = COUNTERFACTUAL_HORIZON_CANDLES,
-                 pg_factory=None, duck_factory=None, embed_fn=embed, now_fn=None):
+                 pg_factory=None, duck_factory=None, embed_fn=embed, now_fn=None,
+                 use_pgvector: Optional[bool] = None):
         self.k = k
         self.horizon_candles = horizon_candles
         self._embed = embed_fn
         self._now = now_fn or (lambda: datetime.utcnow())
         self._pg_factory = pg_factory
         self._duck_factory = duck_factory
+        self.use_pgvector = use_pgvector
 
     def _pg(self):
         if self._pg_factory:
@@ -142,14 +165,37 @@ class PrecedentRetriever:
 
     def retrieve(self, embedding) -> list:
         cutoff = self._now() - timedelta(hours=self.horizon_candles * _CANDLE_HOURS)
-        rows = self._load_candidates(cutoff)            # [(id, symbol, ts, action, entry, vector)]
-        ranked = cosine_topk(embedding, [(row, row[5]) for row in rows], self.k)
+        if self._pgvector_active():
+            ranked = self._load_topk_pgvector(embedding, cutoff)
+        else:
+            rows = self._load_candidates(cutoff)         # [(id, symbol, ts, action, entry, vector)]
+            ranked = cosine_topk(embedding, [(row, row[5]) for row in rows], self.k)
         out = []
         for row, score in ranked:
             p = self._attach_outcome(row, score)
             if p is not None:
                 out.append(p)
         return out
+
+    def _pgvector_active(self) -> bool:
+        if self.use_pgvector is not None:
+            return self.use_pgvector
+        from vibe_trading.data.db import PostgresDatabase
+        return PostgresDatabase.pgvector_enabled
+
+    def _load_topk_pgvector(self, embedding, cutoff):
+        """[(row, similarity)] where row matches _load_candidates' shape (vector
+        slot None — _attach_outcome never reads it)."""
+        from vibe_trading.data.db import PostgresDatabase
+        sql = pgvector_topk_sql(PostgresDatabase.pgvector_halfvec, EMBEDDING_DIM)
+        q = adapt_embedding(embedding)
+        pg = self._pg()
+        pg.connect()
+        try:
+            rows = pg.conn.execute(sql, (q, cutoff, q, self.k)).fetchall()
+        finally:
+            pg.close()
+        return [((r[0], r[1], r[2], r[3], r[4], None), float(r[5])) for r in rows]
 
     def _load_candidates(self, cutoff):
         pg = self._pg()
