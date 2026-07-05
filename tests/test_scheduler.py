@@ -263,3 +263,74 @@ def test_build_scheduler_is_utc():
     s = TradingScheduler.__new__(TradingScheduler)
     sched = s._build_scheduler()
     assert str(sched.timezone) == "UTC"
+
+
+# --- decision_log prompt_version stamping ---
+
+def test_decision_log_insert_carries_bundle_prompt_version(monkeypatch):
+    """After a tick that logs one (flat) decision, the decision_log INSERT's SQL
+    names prompt_version and its params include prompts.bundle_version()."""
+    from vibe_trading.runtime.decision_pipeline import DecisionResult
+    from vibe_trading.agents import prompts
+    import vibe_trading.audit as audit_mod
+
+    sched = _scheduler_without_init()
+    sched.symbols = ["BTC/USDT"]
+
+    # Fetcher: no trending-symbol lookup needed (symbols pre-set), just bootstrap/incremental no-ops.
+    sched.fetcher = MagicMock()
+    sched.fetcher.bootstrap_if_needed = lambda *a, **k: None
+    sched.fetcher.incremental_update = lambda *a, **k: None
+
+    # Broker: no open positions, a spot fallback mark price.
+    sched.broker = MagicMock()
+    sched.broker.get_open_positions.return_value = []
+    sched.broker.get_mark_price.return_value = 100.0
+
+    # DuckDB side (candle reads) — same connection object reused across connect() calls.
+    fake_db_conn = MagicMock()
+    fake_db_conn.execute.return_value.fetchone.return_value = (datetime(2026, 6, 1), 100.0)
+    sched.db = MagicMock()
+    sched.db.conn = fake_db_conn
+
+    # Cost gates: never block/alarm.
+    sched._check_cost_alarm = lambda: None
+    sched._trading_blocked_by_cost = lambda: False
+    sched._snapshot_equity = lambda: None
+    sched._record_closed_trades = lambda closed: None
+    sched._send_discord_alert = lambda msg: None
+
+    # Decision pipeline: force a FLAT decision so the tick logs to decision_log and stops
+    # (no risk-manager/broker.submit_order path needs mocking).
+    proposal = {
+        "decision_id": "dec-1", "timestamp": "2026-06-01T00:00:00", "symbol": "BTC/USDT",
+        "action": "flat", "stop_loss_strategy": "n/a", "take_profit_strategy": "n/a",
+        "risk_reward_ratio": 0.0, "reasoning_summary": "no edge",
+    }
+    fake_report = MagicMock()
+    fake_report.model_dump.return_value = {}
+    result = DecisionResult(
+        symbol="BTC/USDT", status="flat", analyst_report=fake_report,
+        snapshot={"close": 100.0}, proposal=proposal, trace_id="trace-1",
+    )
+    sched.decision_pipeline = MagicMock()
+    sched.decision_pipeline.run_symbol.return_value = result
+
+    # Postgres side — capture the decision_log INSERT.
+    pg_execute_calls = []
+    fake_pg_conn = MagicMock()
+    fake_pg_conn.execute.side_effect = lambda *a, **k: pg_execute_calls.append(
+        MagicMock(args=a, kwargs=k))
+    sched.pg_db = MagicMock()
+    sched.pg_db.conn = fake_pg_conn
+
+    monkeypatch.setattr(audit_mod, "append_decision", lambda record: None)
+
+    sched.sync_and_evaluate()
+
+    insert_calls = [c for c in pg_execute_calls
+                    if "INSERT OR IGNORE INTO decision_log" in c.args[0]]
+    assert insert_calls, "no decision_log INSERT captured"
+    sql, params = insert_calls[0].args[0], insert_calls[0].args[1]
+    assert "prompt_version" in sql
+    assert prompts.bundle_version() in params

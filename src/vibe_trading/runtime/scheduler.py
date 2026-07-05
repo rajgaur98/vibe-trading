@@ -16,6 +16,7 @@ from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
 from vibe_trading.agents.trader import HeadTrader
 from vibe_trading.agents.client import LLMClient
 from vibe_trading.agents.cost import PostgresCostLogger, daily_summary, should_alarm, should_block_trading
+from vibe_trading.agents import prompts
 from vibe_trading.brokers.risk import RiskManager
 from vibe_trading.brokers.paper import PaperBroker
 from vibe_trading.brokers.coinbase import CoinbaseBroker
@@ -204,11 +205,12 @@ class TradingScheduler:
                     self.pg_db.connect()
                     try:
                         self.pg_db.conn.execute("""
-                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id, prompt_version)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
                               proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
-                              proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id))
+                              proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id,
+                              prompts.bundle_version()))
                         # Persist the setup embedding (journal RAG) on the same connection, so
                         # this decision becomes a future precedent once its outcome lands.
                         journal.persist_embedding(

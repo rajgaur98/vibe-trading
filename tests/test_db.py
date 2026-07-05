@@ -87,3 +87,15 @@ def test_decision_embeddings_table_in_schema():
     assert "decision_embeddings" in src
     for col in ("decision_id", "symbol", "embedding"):
         assert col in src
+
+
+def test_duckdb_decision_log_has_prompt_version(tmp_path):
+    from vibe_trading.data.db import Database
+    db = Database(db_path=str(tmp_path / "t.db"))
+    db.connect()
+    try:
+        cols = [r[1] for r in db.conn.execute(
+            "PRAGMA table_info('decision_log')").fetchall()]
+        assert "prompt_version" in cols
+    finally:
+        db.close()

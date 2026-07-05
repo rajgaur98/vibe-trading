@@ -133,7 +133,8 @@ class Database:
                 risk_reward_ratio DOUBLE,
                 reasoning_summary VARCHAR,
                 agent_transcripts VARCHAR, -- JSON string of the agent reasoning transcripts
-                trace_id VARCHAR -- Langfuse trace id (join a decision to its trace)
+                trace_id VARCHAR, -- Langfuse trace id (join a decision to its trace)
+                prompt_version VARCHAR -- prompts.bundle_version() at decision time
             )
         """)
 
@@ -166,6 +167,7 @@ class Database:
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
             "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR",
             "ALTER TABLE open_positions ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
+            "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
         ):
             try:
                 self.conn.execute(stmt)
@@ -349,7 +351,8 @@ class PostgresDatabase:
                     risk_reward_ratio DOUBLE PRECISION,
                     reasoning_summary TEXT,
                     agent_transcripts TEXT,
-                    trace_id VARCHAR
+                    trace_id VARCHAR,
+                    prompt_version VARCHAR -- prompts.bundle_version() at decision time
                 )
             """)
             self.conn.execute("""
@@ -390,6 +393,7 @@ class PostgresDatabase:
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER",
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS schema_ok BOOLEAN",
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
+                "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
             ):
                 self.conn.execute(stmt)
             self.conn.commit()
