@@ -109,6 +109,7 @@ def build_judge() -> Callable[[str, Rubric], JudgeOutput]:
             system_instruction=_JUDGE_SYSTEM,
             prompt=prompt,
             response_schema=JudgeOutput,
+            prompt_version=prompts.JUDGE_SYSTEM.stamp,
         )
         return JudgeOutput.model_validate_json(raw)
 

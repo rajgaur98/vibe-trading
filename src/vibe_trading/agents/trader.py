@@ -58,7 +58,7 @@ class HeadTrader:
         with propagate_attributes(
             trace_name=f"HeadTrader-decide-{symbol}",
             tags=[symbol],
-            metadata={"symbol": symbol}
+            metadata={"symbol": symbol, "prompt_version": prompts.TRADER_SYSTEM.stamp}
         ):
             precedent_block = ""
             if precedents:
@@ -98,6 +98,7 @@ class HeadTrader:
                     system_instruction=self.system_instruction,
                     prompt=prompt + extra,
                     response_schema=HeadTraderOutput,
+                    prompt_version=prompts.TRADER_SYSTEM.stamp,
                 )
 
             raw_output = _call_single()

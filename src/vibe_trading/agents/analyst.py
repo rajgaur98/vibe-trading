@@ -83,7 +83,7 @@ class TechnicalVolumeAnalyst:
         with propagate_attributes(
             trace_name=f"Analyst-analyze-{symbol}",
             tags=[symbol],
-            metadata={"symbol": symbol},
+            metadata={"symbol": symbol, "prompt_version": prompts.ANALYST_SYSTEM.stamp},
         ):
             if self.tool_executor is not None and snapshot is None:
                 self.tool_executor.set_timestamp(timestamp)
@@ -102,6 +102,7 @@ class TechnicalVolumeAnalyst:
                         tools=ANALYST_TOOLS,
                         tool_executor=self.tool_executor,
                         expect_schema=True,
+                        prompt_version=prompts.ANALYST_SYSTEM.stamp,
                     )
 
                 raw_output = _call_tool_loop()
@@ -120,6 +121,7 @@ class TechnicalVolumeAnalyst:
                         system_instruction=self.system_instruction,
                         prompt=prompt + extra,
                         response_schema=AnalystOutput,
+                        prompt_version=prompts.ANALYST_SYSTEM.stamp,
                     )
 
                 raw_output = _call_single()

@@ -84,3 +84,46 @@ def test_pins_are_current():
     pins = json.loads(PINS_PATH.read_text())
     violations = prompts.check_pins(list(prompts.REGISTRY.values()), pins)
     assert violations == [], "\n".join(violations)
+
+
+def test_trader_stamps_its_calls(monkeypatch):
+    import os
+    from unittest.mock import MagicMock
+    from vibe_trading.agents.trader import HeadTrader
+    from vibe_trading.agents.analyst import AnalystOutput
+
+    os.environ.setdefault("GEMINI_API_KEY", "test-key")
+    client = MagicMock()
+    client.provider = "gemini"
+    client.model = "m"
+    client.call_llm.return_value = (
+        '{"action": "flat", "stop_loss_strategy": "1.5_atr", '
+        '"take_profit_strategy": "3.0_atr", "risk_reward_ratio": 2.0, '
+        '"hold_period_bias": "medium", "reasoning_summary": "r"}'
+    )
+    trader = HeadTrader(client=client)
+    analyst_output = AnalystOutput(
+        market_bias="neutral", volume_confirmation="weak", thesis="t",
+        nearest_support=1.0, nearest_resistance=2.0, confluence_score=0.5)
+    trader.decide("BTC/USDT", analyst_output, {}, [], current_price=1.5)
+    assert client.call_llm.call_args.kwargs["prompt_version"] \
+        == prompts.TRADER_SYSTEM.stamp
+
+
+def test_analyst_snapshot_path_stamps_its_calls(monkeypatch):
+    import os
+    from unittest.mock import MagicMock
+    from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
+
+    os.environ.setdefault("GEMINI_API_KEY", "test-key")
+    client = MagicMock()
+    client.provider = "gemini"
+    client.model = "m"
+    client.call_llm.return_value = (
+        '{"market_bias": "neutral", "volume_confirmation": "weak", "thesis": "t", '
+        '"nearest_support": 1.0, "nearest_resistance": 2.0, "confluence_score": 0.5}'
+    )
+    analyst = TechnicalVolumeAnalyst(client=client, db=None, fetcher=None)
+    analyst.analyze("BTC/USDT", snapshot={"close": 1.5})
+    assert client.call_llm.call_args.kwargs["prompt_version"] \
+        == prompts.ANALYST_SYSTEM.stamp
