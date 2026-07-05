@@ -234,3 +234,44 @@ def test_retriever_fallback_path_unchanged_when_pgvector_off():
     sql = pg.conn.execute.call_args_list[0].args[0]
     assert "<=>" not in sql                 # candidates loaded, ranked in Python
     assert "SELECT decision_id, symbol" in sql
+
+
+def test_replay_journal_no_lookahead_and_outcomes():
+    from datetime import datetime, timedelta
+    from vibe_trading.journal import ReplayJournal
+
+    fixed = [0.9, 0.1, 0.0]
+    journal_ = ReplayJournal(
+        k=4, horizon_candles=6, embed_fn=lambda text: fixed,
+        candle_close_fn=lambda sym, target, not_after: 104.0)
+    t0 = datetime(2026, 6, 1, 0, 0)
+
+    # decision older than the horizon relative to the replay clock -> retrievable
+    journal_.record_decision("dec-old", "BTC/USDT", t0, "long", 100.0, fixed)
+    # decision INSIDE the horizon -> must NOT be retrievable (outcome unknown yet)
+    journal_.record_decision("dec-new", "BTC/USDT", t0 + timedelta(hours=30),
+                             "long", 100.0, fixed)
+    journal_.current_ts = t0 + timedelta(hours=36)   # horizon = 24h
+
+    result = journal_.retrieve_for("whatever")
+    ids = [p.outcome_label for p in result.precedents]
+    assert len(result.precedents) == 1               # only dec-old
+    p = result.precedents[0]
+    assert p.kind == "counterfactual"
+    assert p.outcome_pct == pytest.approx(4.0)       # (104-100)/100, long
+
+    # once its trade closes, the precedent switches to the real outcome
+    journal_.record_closed_trade({"decision_id": "dec-old", "result": "win",
+                                  "realized_pnl": 80.0, "size_usd": 1000.0})
+    p2 = journal_.retrieve_for("whatever").precedents[0]
+    assert p2.kind == "closed"
+    assert p2.outcome_pct == pytest.approx(8.0)
+
+
+def test_replay_journal_empty_and_failed_embed_degrade():
+    from datetime import datetime
+    from vibe_trading.journal import ReplayJournal
+    journal_ = ReplayJournal(embed_fn=lambda text: None)
+    journal_.current_ts = datetime(2026, 6, 2)
+    result = journal_.retrieve_for("x")
+    assert result.embedding is None and result.precedents == []
