@@ -463,39 +463,7 @@ class PostgresDatabase:
             ):
                 self.conn.execute(stmt)
 
-            # --- pgvector enablement (fail-soft; see docs/superpowers/plans/...) ---
-            try:
-                try:
-                    self.conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-                except Exception:
-                    self.conn.rollback()  # no privilege / no extension -> fallback path
-                ext = self.conn.execute(
-                    "SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone()
-                if ext:
-                    col = self.conn.execute(
-                        "SELECT udt_name FROM information_schema.columns "
-                        "WHERE table_name = 'decision_embeddings' "
-                        "AND column_name = 'embedding'").fetchone()
-                    if col and col[0] == "_float8":  # still float8[] -> migrate once
-                        row = self.conn.execute(
-                            "SELECT array_length(embedding, 1) FROM decision_embeddings "
-                            "LIMIT 1").fetchone()
-                        dim = resolve_embedding_dim(row[0] if row else None, EMBEDDING_DIM)
-                        for stmt in pgvector_migration_statements(dim):
-                            try:
-                                self.conn.execute(stmt)
-                            except Exception as e:
-                                # index DDL may fail on pgvector < 0.7 (no halfvec);
-                                # the column migration alone is still a win.
-                                logger.warning(f"pgvector DDL skipped: {e}")
-                                self.conn.rollback()
-                    PostgresDatabase.pgvector_enabled = True
-                    half = self.conn.execute(
-                        "SELECT 1 FROM pg_type WHERE typname = 'halfvec'").fetchone()
-                    PostgresDatabase.pgvector_halfvec = bool(half)
-                    logger.info(f"pgvector enabled (halfvec={PostgresDatabase.pgvector_halfvec}).")
-            except Exception as e:
-                logger.warning(f"pgvector probe failed — using in-Python retrieval: {e}")
+            self._enable_pgvector()
 
             self.conn.commit()
             logger.info("Supabase Postgres tables verified successfully.")
@@ -508,4 +476,79 @@ class PostgresDatabase:
             raise
         finally:
             self.close()
+
+    def _get_embedding_column_udt(self):
+        """Re-queries decision_embeddings.embedding's underlying type. Returns
+        'vector' once migrated, '_float8' (or None if the table/column is
+        somehow missing) otherwise. Always re-read from the catalog rather than
+        assumed, so pgvector_enabled reflects reality even if a migration
+        attempt partially failed."""
+        row = self.conn.execute(
+            "SELECT udt_name FROM information_schema.columns "
+            "WHERE table_name = 'decision_embeddings' "
+            "AND column_name = 'embedding'").fetchone()
+        return row[0] if row else None
+
+    def _enable_pgvector(self):
+        """Fail-soft pgvector capability probe + one-time column migration.
+        See docs/superpowers/plans/2026-07-05-retrieval-upgrade.md (Task D1)
+        for the design. This method must NEVER raise — no code path may
+        REQUIRE pgvector; on any unexpected failure we log a warning and the
+        in-Python float8[] fallback (adapt_embedding / cosine_topk) is used.
+
+        The column ALTER and the HNSW index CREATE are deliberately split into
+        separate transactions: the column migration is committed immediately
+        on success, so a subsequent index-build failure (e.g. pgvector < 0.7
+        has no `halfvec` type) only rolls back the index attempt, not the
+        already-successful column migration.
+        """
+        try:
+            try:
+                self.conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()  # no privilege / no extension -> fallback path
+
+            ext = self.conn.execute(
+                "SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone()
+            if not ext:
+                logger.info("pgvector extension not present — using in-Python retrieval.")
+                return
+
+            col_udt = self._get_embedding_column_udt()
+            if col_udt == "_float8":  # still float8[] -> migrate once
+                row = self.conn.execute(
+                    "SELECT array_length(embedding, 1) FROM decision_embeddings "
+                    "LIMIT 1").fetchone()
+                dim = resolve_embedding_dim(row[0] if row else None, EMBEDDING_DIM)
+                alter_stmt, index_stmt = pgvector_migration_statements(dim)
+                try:
+                    self.conn.execute(alter_stmt)
+                    self.conn.commit()  # lock in the column migration independently
+                    col_udt = self._get_embedding_column_udt()
+                except Exception as e:
+                    logger.warning(f"pgvector column migration failed: {e}")
+                    self.conn.rollback()
+                    col_udt = self._get_embedding_column_udt()
+
+                if col_udt == "vector":
+                    try:
+                        self.conn.execute(index_stmt)
+                        self.conn.commit()
+                    except Exception as e:
+                        # HNSW build may fail on pgvector < 0.7 (no halfvec type);
+                        # the already-committed column migration is unaffected.
+                        logger.warning(f"pgvector HNSW index build skipped: {e}")
+                        self.conn.rollback()
+
+            PostgresDatabase.pgvector_enabled = (col_udt == "vector")
+            half = self.conn.execute(
+                "SELECT 1 FROM pg_type WHERE typname = 'halfvec'").fetchone()
+            PostgresDatabase.pgvector_halfvec = bool(half)
+            logger.info(
+                f"pgvector enabled={PostgresDatabase.pgvector_enabled} "
+                f"halfvec={PostgresDatabase.pgvector_halfvec}."
+            )
+        except Exception as e:
+            logger.warning(f"pgvector probe failed — using in-Python retrieval: {e}")
 
