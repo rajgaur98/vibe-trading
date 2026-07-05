@@ -1,5 +1,8 @@
 import hashlib
+import json
+from pathlib import Path
 
+from vibe_trading.agents import prompts
 from vibe_trading.agents.prompts import PromptSpec, check_pins, pins_payload
 
 
@@ -43,3 +46,41 @@ def test_unpinned_and_orphaned_prompts_are_violations():
     pinned = pins_payload([spec(name="old_prompt")])
     violations = check_pins([spec(name="new_prompt")], pinned)
     assert len(violations) == 2  # new_prompt unpinned + old_prompt orphaned
+
+
+PINS_PATH = Path("tests/fixtures/prompt_pins.json")
+
+
+def test_registry_contains_the_three_system_prompts():
+    assert set(prompts.REGISTRY) == {"analyst_system", "trader_system", "judge_system"}
+    for s in prompts.REGISTRY.values():
+        assert s.text.strip()  # non-empty, real content
+
+
+def test_registered_texts_are_the_ones_agents_use():
+    from vibe_trading.agents.analyst import TechnicalVolumeAnalyst
+    from vibe_trading.agents.trader import HeadTrader
+    from vibe_trading.eval import scorer
+    import os
+    os.environ.setdefault("GEMINI_API_KEY", "test-key")
+    assert TechnicalVolumeAnalyst(db=None, fetcher=None).system_instruction \
+        == prompts.ANALYST_SYSTEM.text
+    assert HeadTrader().system_instruction == prompts.TRADER_SYSTEM.text
+    assert scorer._JUDGE_SYSTEM == prompts.JUDGE_SYSTEM.text
+
+
+def test_versions_map_and_bundle_version():
+    vm = prompts.versions_map()
+    assert vm["analyst_system"] == prompts.ANALYST_SYSTEM.stamp
+    # bundle covers ONLY the decision-path prompts (analyst + trader), ';'-joined in
+    # name order — judge prompts must not perturb the decision-level stamp
+    assert prompts.bundle_version() == ";".join(
+        [prompts.ANALYST_SYSTEM.stamp, prompts.TRADER_SYSTEM.stamp])
+
+
+def test_pins_are_current():
+    """THE enforcement test: editing any prompt text without bumping its version
+    (or bumping without regenerating pins) fails here with instructions."""
+    pins = json.loads(PINS_PATH.read_text())
+    violations = prompts.check_pins(list(prompts.REGISTRY.values()), pins)
+    assert violations == [], "\n".join(violations)
