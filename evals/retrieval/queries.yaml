@@ -1,0 +1,14 @@
+# Hand-labeled retrieval relevance judgments. For each query setup, `relevant`
+# lists decision_ids from corpus.jsonl a human judged to be genuinely analogous
+# setups (same regime + structure story, not just same symbol).
+# Labeling workflow: python evals/export_retrieval_corpus.py, then for each query
+# skim the corpus for analogous setups. Aim for ~20 queries across regimes.
+- id: q-example-bullish-breakout
+  setup_text: "bias=bullish; volume=confirmed; confluence=0.8; rsi=neutral; macd=bullish_cross; adx=strong_trend; obv=accumulation; support_prox=far; resistance_prox=near; pattern=none; funding=neutral; oi=rising; thesis=Breakout above resistance on rising volume"
+  relevant: [REPLACE-WITH-REAL-DECISION-ID]
+- id: q-example-oversold-chop
+  setup_text: "bias=neutral; volume=weak; confluence=0.3; rsi=oversold; macd=bearish; adx=weak_trend; obv=flat; support_prox=near; resistance_prox=far; pattern=hammer; funding=neutral; oi=falling; thesis=Oversold bounce attempt in a chop range"
+  relevant: [REPLACE-WITH-REAL-DECISION-ID]
+- id: q-example-bearish-divergence
+  setup_text: "bias=bearish; volume=divergent; confluence=0.6; rsi=overbought; macd=bearish_divergence; adx=strong_trend; obv=distribution; support_prox=far; resistance_prox=near; pattern=shooting_star; funding=positive; oi=rising; thesis=Price making highs on OBV distribution — exhaustion risk"
+  relevant: [REPLACE-WITH-REAL-DECISION-ID]
