@@ -37,6 +37,7 @@ class DecisionResult:
     risk_result: Optional[dict] = None
     setup_text: Optional[str] = None
     setup_embedding: Optional[list] = None
+    precedents_k: int = 0
 
 
 class DecisionPipeline:
@@ -74,6 +75,7 @@ class DecisionPipeline:
         open_positions = self.broker.get_open_positions()
         setup_text = build_setup_card(analyst_report, snapshot)
         retrieval = self.retriever.retrieve_for(setup_text)
+        precedents_k = len(retrieval.precedents)
         proposal = self.trader.decide(
             symbol, analyst_report, self.scorecard, open_positions,
             current_price=exec_price, precedents=retrieval.precedents,
@@ -83,7 +85,8 @@ class DecisionPipeline:
         if proposal["action"] == "flat":
             return DecisionResult(symbol, "flat", analyst_report=analyst_report,
                                   snapshot=snapshot, proposal=proposal, trace_id=trace_id,
-                                  setup_text=setup_text, setup_embedding=retrieval.embedding)
+                                  setup_text=setup_text, setup_embedding=retrieval.embedding,
+                                  precedents_k=precedents_k)
 
         # Stage 4 — Risk Manager (deterministic sizing / veto). Balance is fetched here
         # (only for non-flat proposals) to preserve the original lazy-fetch behavior.
@@ -100,4 +103,5 @@ class DecisionPipeline:
         status = "approved" if risk_result["approved"] else "rejected"
         return DecisionResult(symbol, status, analyst_report=analyst_report, snapshot=snapshot,
                               proposal=proposal, trace_id=trace_id, risk_result=risk_result,
-                              setup_text=setup_text, setup_embedding=retrieval.embedding)
+                              setup_text=setup_text, setup_embedding=retrieval.embedding,
+                              precedents_k=precedents_k)

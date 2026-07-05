@@ -2,7 +2,6 @@ import os
 import time
 import logging
 from datetime import datetime, date
-import urllib.request
 import json
 from apscheduler.schedulers.blocking import BlockingScheduler
 from langfuse import observe, propagate_attributes
@@ -206,12 +205,12 @@ class TradingScheduler:
                     self.pg_db.connect()
                     try:
                         self.pg_db.conn.execute("""
-                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id, prompt_version)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id, prompt_version, precedents_k)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
                               proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
                               proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id,
-                              prompts.bundle_version()))
+                              prompts.bundle_version(), result.precedents_k))
                         # Persist the setup embedding (journal RAG) on the same connection, so
                         # this decision becomes a future precedent once its outcome lands.
                         journal.persist_embedding(

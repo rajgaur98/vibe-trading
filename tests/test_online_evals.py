@@ -85,7 +85,8 @@ def test_run_pass_scores_one_decision_and_pushes_langfuse():
     now = datetime(2026, 7, 5, 12, 0)
     old_ts = now - timedelta(hours=48)  # past the 24h horizon
     pg = _fake_pg({
-        "FROM decision_log": [("dec-1", old_ts, "BTC/USDT", "long", "trace-1", "bundle-v1")],
+        "FROM decision_log": [("dec-1", old_ts, "BTC/USDT", "long", "trace-1",
+                               "bundle-v1", 2)],
         "FROM trades": [],
         "FROM open_positions": [],
     })
@@ -106,6 +107,26 @@ def test_run_pass_scores_one_decision_and_pushes_langfuse():
     assert "bundle-v1" in params            # prompt_version copied over
     assert pushed and pushed[0][0][0] == "trace-1"   # trace_id
     assert pushed[0][0][1] == "outcome_score"        # Langfuse score name
+
+
+def test_run_pass_copies_precedents_k():
+    now = datetime(2026, 7, 5, 12, 0)
+    old_ts = now - timedelta(hours=48)  # past the 24h horizon
+    pg = _fake_pg({
+        "FROM decision_log": [("dec-1", old_ts, "BTC/USDT", "long", "trace-1",
+                               "bundle-v1", 3)],
+        "FROM trades": [],
+        "FROM open_positions": [],
+    })
+    duck = MagicMock()
+    duck.conn.execute.return_value.fetchone.side_effect = [(100.0,), (104.0,)]
+    scorer = OutcomeScorer(pg_factory=lambda: pg, duck_factory=lambda: duck,
+                           now_fn=lambda: now, push_fn=lambda *a, **k: None)
+    assert scorer.run_pass() == 1
+    insert = [c for c in pg.conn.execute.call_args_list
+              if "INSERT OR IGNORE INTO decision_scores" in c.args[0]][0]
+    assert "precedents_k" in insert.args[0]
+    assert 3 in insert.args[1]
 
 
 def test_run_pass_never_raises(caplog):

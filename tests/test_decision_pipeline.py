@@ -86,6 +86,46 @@ def test_pipeline_defaults_to_noop_retriever():
     assert res.setup_embedding is None
 
 
+def test_decision_result_carries_precedents_k_flat():
+    """run_symbol reports how many precedents were actually injected (flat branch)."""
+    from vibe_trading.journal import RetrievalResult, Precedent
+    p, analyst, trader, risk, fp, broker = _pipeline()
+    trader.decide.return_value = {"action": "flat", "decision_id": "d1"}
+    retriever = MagicMock()
+    two = [Precedent("BTC/USDT", "long", "2026-06-01", 0.9, "closed", 2.0, "won"),
+           Precedent("ETH/USDT", "long", "2026-06-02", 0.8, "closed", 1.0, "won")]
+    retriever.retrieve_for.return_value = RetrievalResult([0.1], two)
+    p.retriever = retriever
+
+    res = p.run_symbol("BTC/USDT", "ts", 100.0)
+
+    assert res.precedents_k == 2
+
+
+def test_decision_result_carries_precedents_k_approved():
+    """run_symbol reports precedents_k on the approved/rejected branch too."""
+    from vibe_trading.journal import RetrievalResult, Precedent
+    p, analyst, trader, risk, fp, broker = _pipeline()
+    trader.decide.return_value = {"action": "long", "decision_id": "d2"}
+    risk.evaluate_proposal.return_value = {"approved": True, "size_usd": 100.0}
+    retriever = MagicMock()
+    three = [Precedent("BTC/USDT", "long", "2026-06-01", 0.9, "closed", 2.0, "won")] * 3
+    retriever.retrieve_for.return_value = RetrievalResult([0.1], three)
+    p.retriever = retriever
+
+    res = p.run_symbol("BTC/USDT", "ts", 250.0)
+
+    assert res.status == "approved"
+    assert res.precedents_k == 3
+
+
+def test_decision_result_defaults_precedents_k_to_zero():
+    p, analyst, trader, risk, fp, broker = _pipeline()
+    trader.decide.return_value = {"action": "flat", "decision_id": "d1"}
+    res = p.run_symbol("BTC/USDT", "ts", 100.0)
+    assert res.precedents_k == 0
+
+
 def test_rejected_status():
     p, analyst, trader, risk, fp, broker = _pipeline()
     trader.decide.return_value = {"action": "short", "decision_id": "d3"}

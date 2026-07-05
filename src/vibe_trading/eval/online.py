@@ -136,7 +136,7 @@ class OutcomeScorer:
         try:
             candidates = pg.conn.execute(
                 "SELECT d.decision_id, d.timestamp, d.symbol, d.action, d.trace_id, "
-                "       d.prompt_version "
+                "       d.prompt_version, d.precedents_k "
                 "FROM decision_log d LEFT JOIN decision_scores s "
                 "  ON s.decision_id = d.decision_id "
                 "WHERE s.decision_id IS NULL AND d.action != 'close' "
@@ -148,12 +148,12 @@ class OutcomeScorer:
 
         scored = 0
         horizon = timedelta(hours=self.horizon_candles * _CANDLE_HOURS)
-        for decision_id, ts, symbol, action, trace_id, prompt_version in candidates:
+        for decision_id, ts, symbol, action, trace_id, prompt_version, precedents_k in candidates:
             try:
                 outcome = self._resolve_for(decision_id, ts, symbol, action, horizon)
                 if outcome is None:
                     continue
-                self._persist(decision_id, outcome, prompt_version)
+                self._persist(decision_id, outcome, prompt_version, precedents_k)
                 self._push(trace_id, "outcome_score", outcome.outcome_score,
                            f"{outcome.kind}: {outcome.outcome_pct:+.2f}% ({action})")
                 scored += 1
@@ -203,16 +203,16 @@ class OutcomeScorer:
         )
 
     def _persist(self, decision_id: str, outcome: Outcome,
-                 prompt_version: Optional[str]) -> None:
+                 prompt_version: Optional[str], precedents_k: Optional[int] = None) -> None:
         pg = self._pg()
         pg.connect()
         try:
             pg.conn.execute(
                 "INSERT OR IGNORE INTO decision_scores "
                 "(decision_id, scored_at, kind, outcome_pct, outcome_score, "
-                " prompt_version) VALUES (?, ?, ?, ?, ?, ?)",
+                " prompt_version, precedents_k) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (decision_id, self._now(), outcome.kind, outcome.outcome_pct,
-                 outcome.outcome_score, prompt_version),
+                 outcome.outcome_score, prompt_version, precedents_k),
             )
         finally:
             pg.close()

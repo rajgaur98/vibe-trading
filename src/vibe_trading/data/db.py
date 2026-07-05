@@ -172,7 +172,8 @@ class Database:
                 reasoning_summary VARCHAR,
                 agent_transcripts VARCHAR, -- JSON string of the agent reasoning transcripts
                 trace_id VARCHAR, -- Langfuse trace id (join a decision to its trace)
-                prompt_version VARCHAR -- prompts.bundle_version() at decision time
+                prompt_version VARCHAR, -- prompts.bundle_version() at decision time
+                precedents_k INTEGER -- how many journal precedents the trader saw
             )
         """)
 
@@ -206,6 +207,7 @@ class Database:
             "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS trace_id VARCHAR",
             "ALTER TABLE open_positions ADD COLUMN IF NOT EXISTS decision_id VARCHAR",
             "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
+            "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS precedents_k INTEGER",
         ):
             try:
                 self.conn.execute(stmt)
@@ -402,7 +404,8 @@ class PostgresDatabase:
                     reasoning_summary TEXT,
                     agent_transcripts TEXT,
                     trace_id VARCHAR,
-                    prompt_version VARCHAR -- prompts.bundle_version() at decision time
+                    prompt_version VARCHAR, -- prompts.bundle_version() at decision time
+                    precedents_k INTEGER -- how many journal precedents the trader saw
                 )
             """)
             self.conn.execute("""
@@ -447,7 +450,8 @@ class PostgresDatabase:
                     judge_score DOUBLE PRECISION,    -- [0,1], NULL until sampled
                     judge_note TEXT,
                     judged_at TIMESTAMP,
-                    prompt_version VARCHAR           -- copied from decision_log at scoring time
+                    prompt_version VARCHAR,          -- copied from decision_log at scoring time
+                    precedents_k INTEGER             -- how many journal precedents the trader saw
                 )
             """)
             # Idempotent column migrations for pre-existing Supabase tables.
@@ -460,6 +464,8 @@ class PostgresDatabase:
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS schema_ok BOOLEAN",
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
                 "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
+                "ALTER TABLE decision_log ADD COLUMN IF NOT EXISTS precedents_k INTEGER",
+                "ALTER TABLE decision_scores ADD COLUMN IF NOT EXISTS precedents_k INTEGER",
             ):
                 self.conn.execute(stmt)
 
