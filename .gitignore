@@ -42,3 +42,6 @@ env/
 /.env
 /data/
 /.pytest_cache/
+
+# Claude Code local worktrees / session state
+.claude/
