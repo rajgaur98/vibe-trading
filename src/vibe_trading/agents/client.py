@@ -249,6 +249,7 @@ class LLMClient:
         prompt: str,
         response_schema: type = None,
         prompt_version: Optional[str] = None,
+        call_type: str = "single",
     ) -> str:
         """
         Invokes the configured LLM provider via LiteLLM and returns the raw JSON string content.
@@ -279,9 +280,9 @@ class LLMClient:
         if response_schema:
             # Structured call: defer the cost event so the schema parse helper can
             # attach the compliance outcome before it reaches the single sink.
-            self._defer_cost(response, model_str, "single", latency_ms, prompt_version=prompt_version)
+            self._defer_cost(response, model_str, call_type, latency_ms, prompt_version=prompt_version)
         else:
-            self._emit_cost(response, model_str, "single", latency_ms, prompt_version=prompt_version)
+            self._emit_cost(response, model_str, call_type, latency_ms, prompt_version=prompt_version)
         return response.choices[0].message.content
 
     def call_llm_with_tools(

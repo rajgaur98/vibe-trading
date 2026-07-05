@@ -113,3 +113,78 @@ def test_run_pass_never_raises(caplog):
     pg.connect.side_effect = RuntimeError("db down")
     scorer = OutcomeScorer(pg_factory=lambda: pg)
     assert scorer.run_pass() == 0  # swallowed, logged, zero scored
+
+
+from vibe_trading.eval.online import OnlineJudge, OnlineJudgeVerdict
+
+
+def _judge_pg(unjudged_rows, judged_today=0, spend_today=0.0):
+    pg = MagicMock()
+    def execute(sql, params=None):
+        cur = MagicMock()
+        if "judged_at >=" in sql:                      # daily cap counter
+            cur.fetchone.return_value = (judged_today,)
+        elif "FROM llm_cost_log" in sql:               # daily_summary spend query
+            cur.fetchone.return_value = (spend_today, 0, 0, 0, 0, 0, 0)
+            cur.fetchall.return_value = []
+        elif "judge_score IS NULL" in sql:             # sample selection
+            cur.fetchall.return_value = unjudged_rows
+        else:
+            cur.fetchall.return_value = []
+            cur.fetchone.return_value = None
+        return cur
+    pg.conn.execute.side_effect = execute
+    return pg
+
+
+def _row():
+    return ("dec-1", "long", "BTC/USDT", "went long on confluence",
+            '{"close": 100.0, "rsi_14": 60.0}', "trace-1")
+
+
+def test_judge_scores_a_sampled_decision():
+    import os
+    os.environ.setdefault("GEMINI_API_KEY", "test-key")
+    client = MagicMock()
+    client.provider = "gemini"
+    client.model = "m"
+    client.call_llm.return_value = (
+        '{"grounded": true, "consistent": false, "justification": "j"}')
+    pg = _judge_pg([_row()])
+    pushed = []
+    judge = OnlineJudge(client=client, pg_factory=lambda: pg,
+                        push_fn=lambda *a, **k: pushed.append(a))
+    assert judge.run_pass() == 1
+    # judge call is tagged for cost attribution
+    assert client.call_llm.call_args.kwargs["call_type"] == "online_judge"
+    updates = [c for c in pg.conn.execute.call_args_list
+               if "UPDATE decision_scores" in c.args[0]]
+    assert updates and updates[0].args[1][0] == pytest.approx(0.5)  # (True+False)/2
+    assert pushed[0][1] == "online_judge_score"
+
+
+def test_judge_respects_daily_cap():
+    client = MagicMock()
+    pg = _judge_pg([_row()], judged_today=5)   # cap (default 5) already reached
+    judge = OnlineJudge(client=client, pg_factory=lambda: pg)
+    assert judge.run_pass() == 0
+    client.call_llm.assert_not_called()
+
+
+def test_judge_skips_when_llm_cost_cap_reached(monkeypatch):
+    monkeypatch.setenv("LLM_DAILY_COST_CAP_USD", "10.0")
+    client = MagicMock()
+    pg = _judge_pg([_row()], spend_today=10.0)
+    judge = OnlineJudge(client=client, pg_factory=lambda: pg)
+    assert judge.run_pass() == 0
+    client.call_llm.assert_not_called()
+
+
+def test_unparseable_verdict_is_skipped_not_raised():
+    client = MagicMock()
+    client.provider = "gemini"
+    client.model = "m"
+    client.call_llm.return_value = "not json"
+    pg = _judge_pg([_row()])
+    judge = OnlineJudge(client=client, pg_factory=lambda: pg)
+    assert judge.run_pass() == 0  # no UPDATE, no exception

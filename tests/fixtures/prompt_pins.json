@@ -10,5 +10,9 @@
   "judge_system": {
     "version": "v1",
     "sha": "530f5dabac5c"
+  },
+  "online_judge_system": {
+    "version": "v1",
+    "sha": "6d4ea89a0d70"
   }
 }

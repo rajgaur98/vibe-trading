@@ -51,8 +51,9 @@ def test_unpinned_and_orphaned_prompts_are_violations():
 PINS_PATH = Path("tests/fixtures/prompt_pins.json")
 
 
-def test_registry_contains_the_three_system_prompts():
-    assert set(prompts.REGISTRY) == {"analyst_system", "trader_system", "judge_system"}
+def test_registry_contains_the_four_system_prompts():
+    assert set(prompts.REGISTRY) == {
+        "analyst_system", "trader_system", "judge_system", "online_judge_system"}
     for s in prompts.REGISTRY.values():
         assert s.text.strip()  # non-empty, real content
 

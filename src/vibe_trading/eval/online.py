@@ -212,3 +212,125 @@ class OutcomeScorer:
             )
         finally:
             pg.close()
+
+
+import json
+import os
+
+from pydantic import BaseModel
+
+from vibe_trading.agents import prompts
+from vibe_trading.agents.cost import daily_summary, should_block_trading
+
+ONLINE_JUDGE_DAILY_CAP = int(os.getenv("ONLINE_JUDGE_DAILY_CAP", "5"))
+
+
+class OnlineJudgeVerdict(BaseModel):
+    grounded: bool      # reasoning cites only facts present in the snapshot
+    consistent: bool    # action follows from the stated reasoning
+    justification: str
+
+
+class OnlineJudge:
+    """C2: sample scored-but-unjudged decisions and grade them with a generic
+    rubric. Capped per UTC day; skipped entirely once the LLM cost cap is hit."""
+
+    def __init__(self, client=None, pg_factory=None, now_fn=None, push_fn=None,
+                 daily_cap: Optional[int] = None):
+        self._client = client
+        self._pg_factory = pg_factory
+        self._now = now_fn or (lambda: datetime.utcnow())
+        self._push = push_fn or push_langfuse_score
+        self.daily_cap = daily_cap if daily_cap is not None else ONLINE_JUDGE_DAILY_CAP
+
+    def _pg(self):
+        if self._pg_factory:
+            return self._pg_factory()
+        from vibe_trading.data.db import PostgresDatabase
+        return PostgresDatabase()
+
+    def _get_client(self):
+        if self._client is None:
+            from vibe_trading.agents.client import LLMClient
+            self._client = LLMClient()
+        return self._client
+
+    def run_pass(self) -> int:
+        """Judge up to (daily_cap - already judged today) decisions. Never raises."""
+        try:
+            return self._run_pass()
+        except Exception as e:
+            logger.warning(f"online judge pass failed (non-fatal): {e}")
+            return 0
+
+    def _run_pass(self) -> int:
+        today_start = self._now().replace(hour=0, minute=0, second=0, microsecond=0)
+        pg = self._pg()
+        pg.connect()
+        try:
+            # Cost-cap guard: judging is optional spend; trading's kill switch wins.
+            cap = float(os.getenv("LLM_DAILY_COST_CAP_USD", "10.0"))
+            if should_block_trading(daily_summary(pg.conn)["today_usd"], cap):
+                logger.info("online judge skipped: LLM daily cost cap reached")
+                return 0
+            judged_today = pg.conn.execute(
+                "SELECT COUNT(*) FROM decision_scores WHERE judged_at >= ?",
+                (today_start,)).fetchone()[0]
+            remaining = self.daily_cap - int(judged_today or 0)
+            if remaining <= 0:
+                return 0
+            rows = pg.conn.execute(
+                "SELECT s.decision_id, d.action, d.symbol, d.reasoning_summary, "
+                "       d.agent_transcripts, d.trace_id "
+                "FROM decision_scores s JOIN decision_log d "
+                "  ON d.decision_id = s.decision_id "
+                "WHERE s.judge_score IS NULL "
+                "ORDER BY s.scored_at DESC LIMIT ?",
+                (remaining,)).fetchall()
+        finally:
+            pg.close()
+
+        judged = 0
+        for decision_id, action, symbol, reasoning, transcripts, trace_id in rows:
+            verdict = self._judge_one(action, symbol, reasoning, transcripts)
+            if verdict is None:
+                continue
+            score = (int(verdict.grounded) + int(verdict.consistent)) / 2.0
+            self._save(decision_id, score, verdict.justification)
+            self._push(trace_id, "online_judge_score", score, verdict.justification)
+            judged += 1
+        return judged
+
+    def _judge_one(self, action, symbol, reasoning,
+                   transcripts) -> Optional[OnlineJudgeVerdict]:
+        client = self._get_client()
+        model = os.getenv("EVAL_JUDGE_MODEL") or client.model
+        user_prompt = (
+            f"DECISION:\naction: {action}\nsymbol: {symbol}\n"
+            f"reasoning_summary: {reasoning}\n\n"
+            f"FEATURE SNAPSHOT the agents saw:\n{transcripts}"
+        )
+        try:
+            raw = client.call_llm(
+                model_name=model,
+                system_instruction=prompts.ONLINE_JUDGE_SYSTEM.text,
+                prompt=user_prompt,
+                response_schema=OnlineJudgeVerdict,
+                prompt_version=prompts.ONLINE_JUDGE_SYSTEM.stamp,
+                call_type="online_judge",
+            )
+            return OnlineJudgeVerdict.model_validate_json(raw)
+        except Exception as e:
+            logger.warning(f"online judge call/parse failed (non-fatal): {e}")
+            return None
+
+    def _save(self, decision_id: str, score: float, note: str) -> None:
+        pg = self._pg()
+        pg.connect()
+        try:
+            pg.conn.execute(
+                "UPDATE decision_scores SET judge_score = ?, judge_note = ?, "
+                "judged_at = ? WHERE decision_id = ?",
+                (score, note, self._now(), decision_id))
+        finally:
+            pg.close()

@@ -186,7 +186,27 @@ Output strictly matches the JudgeOutput JSON schema. Provide a one-sentence just
 criterion.""",
 )
 
-REGISTRY: dict = {s.name: s for s in (ANALYST_SYSTEM, TRADER_SYSTEM, JUDGE_SYSTEM)}
+ONLINE_JUDGE_SYSTEM = PromptSpec(
+    name="online_judge_system",
+    version="v1",
+    text="""
+You are a rigorous production-quality auditor for an LLM trading system. You will
+receive one trading DECISION (its action and stated reasoning) and the FEATURE
+SNAPSHOT of market data the agents saw when deciding.
+
+Evaluate exactly two properties:
+1. grounded — the reasoning cites only facts present in the snapshot. Any invented
+   number, indicator reading, or level not in the snapshot means grounded=false.
+2. consistent — the action logically follows from the stated reasoning (e.g. a
+   bearish, weak-volume rationale does not support a long entry).
+
+Output strictly matches the OnlineJudgeVerdict JSON schema, with a one-sentence
+justification.
+""".strip(),
+)
+
+REGISTRY: dict = {s.name: s for s in (ANALYST_SYSTEM, TRADER_SYSTEM, JUDGE_SYSTEM,
+                                       ONLINE_JUDGE_SYSTEM)}
 
 
 def versions_map() -> dict:
