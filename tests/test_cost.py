@@ -209,3 +209,30 @@ def test_should_block_trading_under_cap():
 def test_should_block_trading_disabled_when_cap_zero():
     # cap <= 0 disables the kill switch entirely (never blocks)
     assert should_block_trading(today_usd=999.0, cap_usd=0.0) is False
+
+
+def test_cost_event_carries_prompt_version():
+    from vibe_trading.agents.cost import CostEvent
+    e = CostEvent.build(provider="gemini", model="gemini/m", call_type="single",
+                        prompt_tokens=10, completion_tokens=5, latency_ms=100.0,
+                        prompt_version="analyst_system:v1@abcdef123456")
+    assert e.prompt_version == "analyst_system:v1@abcdef123456"
+    # default stays None so untagged calls don't fabricate a version
+    e2 = CostEvent.build(provider="gemini", model="gemini/m", call_type="single",
+                         prompt_tokens=10, completion_tokens=5, latency_ms=100.0)
+    assert e2.prompt_version is None
+
+
+def test_postgres_cost_logger_writes_prompt_version_column():
+    from unittest.mock import MagicMock
+    from vibe_trading.agents.cost import CostEvent, PostgresCostLogger
+    fake_db = MagicMock()
+    logger_ = PostgresCostLogger(db=fake_db)
+    e = CostEvent.build(provider="gemini", model="gemini/m", call_type="single",
+                        prompt_tokens=1, completion_tokens=1, latency_ms=1.0,
+                        prompt_version="trader_system:v1@000000000000")
+    logger_.record(e)
+    sql = fake_db.conn.execute.call_args[0][0]
+    params = fake_db.conn.execute.call_args[0][1]
+    assert "prompt_version" in sql
+    assert "trader_system:v1@000000000000" in params

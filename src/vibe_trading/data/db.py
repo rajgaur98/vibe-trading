@@ -366,7 +366,8 @@ class PostgresDatabase:
                     latency_ms DOUBLE PRECISION,
                     cache_read_tokens INTEGER,
                     cache_write_tokens INTEGER,
-                    schema_ok BOOLEAN
+                    schema_ok BOOLEAN,
+                    prompt_version VARCHAR
                 )
             """)
             self.conn.execute("""
@@ -388,6 +389,7 @@ class PostgresDatabase:
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER",
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER",
                 "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS schema_ok BOOLEAN",
+                "ALTER TABLE llm_cost_log ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
             ):
                 self.conn.execute(stmt)
             self.conn.commit()

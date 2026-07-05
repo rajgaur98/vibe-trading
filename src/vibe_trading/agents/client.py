@@ -115,7 +115,8 @@ class LLMClient:
         return int(read or 0), int(write or 0)
 
     def _build_cost_event(self, response, model_str: str, call_type: str,
-                          latency_ms: float, schema_ok: Optional[bool] = None) -> Optional[CostEvent]:
+                          latency_ms: float, schema_ok: Optional[bool] = None,
+                          prompt_version: Optional[str] = None) -> Optional[CostEvent]:
         """Build a CostEvent from a LiteLLM response. Returns None (and never raises)
         if usage extraction fails — cost logging must not break an LLM call."""
         try:
@@ -127,7 +128,7 @@ class LLMClient:
                 provider=self.provider, model=model_str, call_type=call_type,
                 prompt_tokens=pt, completion_tokens=ct, latency_ms=latency_ms,
                 cache_read_tokens=cache_read, cache_write_tokens=cache_write,
-                schema_ok=schema_ok,
+                schema_ok=schema_ok, prompt_version=prompt_version,
             )
         except Exception as e:
             logger.warning(f"cost event build failed (non-fatal): {e}")
@@ -145,21 +146,25 @@ class LLMClient:
             logger.warning(f"cost emit failed (non-fatal): {e}")
 
     def _emit_cost(self, response, model_str: str, call_type: str, latency_ms: float,
-                   schema_ok: Optional[bool] = None) -> None:
+                   schema_ok: Optional[bool] = None,
+                   prompt_version: Optional[str] = None) -> None:
         """Build + record a cost event immediately. Used by calls that carry no schema
         to validate (so schema_ok stays None unless explicitly supplied)."""
         if LLMClient._cost_sink is None:
             return
-        self._record_cost(self._build_cost_event(response, model_str, call_type, latency_ms, schema_ok))
+        self._record_cost(self._build_cost_event(response, model_str, call_type, latency_ms, schema_ok,
+                                                   prompt_version=prompt_version))
 
-    def _defer_cost(self, response, model_str: str, call_type: str, latency_ms: float) -> None:
+    def _defer_cost(self, response, model_str: str, call_type: str, latency_ms: float,
+                    prompt_version: Optional[str] = None) -> None:
         """Build a cost event but hold it instead of recording, so the schema parse
         helper can attach the validation outcome and flush it via mark_schema_outcome().
         Replaces any previously-deferred (un-flushed) event."""
         if LLMClient._cost_sink is None:
             self._deferred_cost_event = None
             return
-        self._deferred_cost_event = self._build_cost_event(response, model_str, call_type, latency_ms)
+        self._deferred_cost_event = self._build_cost_event(response, model_str, call_type, latency_ms,
+                                                             prompt_version=prompt_version)
 
     def mark_schema_outcome(self, schema_ok: bool) -> None:
         """Flush the most-recently deferred cost event with its schema-compliance
@@ -242,7 +247,8 @@ class LLMClient:
         model_name: str,
         system_instruction: str,
         prompt: str,
-        response_schema: type = None
+        response_schema: type = None,
+        prompt_version: Optional[str] = None,
     ) -> str:
         """
         Invokes the configured LLM provider via LiteLLM and returns the raw JSON string content.
@@ -273,9 +279,9 @@ class LLMClient:
         if response_schema:
             # Structured call: defer the cost event so the schema parse helper can
             # attach the compliance outcome before it reaches the single sink.
-            self._defer_cost(response, model_str, "single", latency_ms)
+            self._defer_cost(response, model_str, "single", latency_ms, prompt_version=prompt_version)
         else:
-            self._emit_cost(response, model_str, "single", latency_ms)
+            self._emit_cost(response, model_str, "single", latency_ms, prompt_version=prompt_version)
         return response.choices[0].message.content
 
     def call_llm_with_tools(
@@ -287,6 +293,7 @@ class LLMClient:
         tool_executor,
         max_iterations: int = 10,
         expect_schema: bool = False,
+        prompt_version: Optional[str] = None,
     ) -> str:
         """Multi-turn agentic loop: LLM proposes tool calls, executor runs them, results fed back.
 
@@ -327,13 +334,13 @@ class LLMClient:
             if not tool_calls:
                 # Final answer: defer its cost so the parse helper can stamp schema_ok.
                 if expect_schema:
-                    self._defer_cost(response, model_str, "tool_loop", latency_ms)
+                    self._defer_cost(response, model_str, "tool_loop", latency_ms, prompt_version=prompt_version)
                 else:
-                    self._emit_cost(response, model_str, "tool_loop", latency_ms)
+                    self._emit_cost(response, model_str, "tool_loop", latency_ms, prompt_version=prompt_version)
                 return assistant_msg.content
 
             # Intermediate tool-call turn: no schema to validate -> record now.
-            self._emit_cost(response, model_str, "tool_loop", latency_ms)
+            self._emit_cost(response, model_str, "tool_loop", latency_ms, prompt_version=prompt_version)
 
             for tool_call in tool_calls:
                 try:
