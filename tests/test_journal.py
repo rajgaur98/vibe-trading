@@ -254,7 +254,6 @@ def test_replay_journal_no_lookahead_and_outcomes():
     journal_.current_ts = t0 + timedelta(hours=36)   # horizon = 24h
 
     result = journal_.retrieve_for("whatever")
-    ids = [p.outcome_label for p in result.precedents]
     assert len(result.precedents) == 1               # only dec-old
     p = result.precedents[0]
     assert p.kind == "counterfactual"

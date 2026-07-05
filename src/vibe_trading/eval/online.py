@@ -9,7 +9,6 @@ A 'correct' flat is scored as 'no strong move happened' — a proxy for 'no edge
 existed', not ground truth (a flat that dodged a crash scores poorly here). The
 caveat is deliberate and documented; deterministic beats clever.
 """
-import json
 import logging
 import os
 from dataclasses import dataclass

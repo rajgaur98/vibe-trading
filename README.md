@@ -477,4 +477,3 @@ diff data/reports/ab_no_rag.json data/reports/ab_rag.json
 Live-side, `decision_log.precedents_k` (copied through to `decision_scores`) records how many
 precedents each decision actually saw, so online eval scores can be segmented by
 `precedents_k > 0` to measure the effect outside of a controlled backtest.
-
