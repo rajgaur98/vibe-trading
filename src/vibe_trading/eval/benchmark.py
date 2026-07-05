@@ -183,3 +183,116 @@ def model_env(provider: str, model: str):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+
+
+import argparse
+import concurrent.futures
+import sys
+
+from vibe_trading.agents.client import (
+    LLMClient, _PROVIDER_API_KEY_ENV, get_litellm_model_string,
+)
+from vibe_trading.data.db import Database
+from vibe_trading.eval.runner import load_cases, run_case
+from vibe_trading.eval.scorer import build_judge, score_case, CaseScore
+
+
+def run_model(spec: str, cases: list, judge, max_workers: int,
+              analyst_path: str) -> tuple[SuiteReport, list[CostEvent]]:
+    """Run the full suite once for one model spec, capturing its cost events.
+    Mirrors eval.main's concurrent loop; one bad case never aborts the run."""
+    provider, model = parse_model_spec(spec)
+    sink = InMemoryCostSink()
+    LLMClient.set_cost_sink(sink)
+    try:
+        with model_env(provider, model):
+            def _process(case) -> CaseScore:
+                try:
+                    result = run_case(case, Database(), analyst_path=analyst_path)
+                    return score_case(result, case, judge)
+                except Exception as e:
+                    logger.warning(f"Case {case.id} crashed during scoring: {e}")
+                    return CaseScore(case_id=case.id, schema_ok=False, field_scores=[],
+                                     analyst_score=0.0, trader_score=0.0,
+                                     total_score=0.0, error=str(e))
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                scores = list(pool.map(_process, cases))
+    finally:
+        LLMClient.set_cost_sink(None)
+    return SuiteReport.from_scores(scores), sink.events
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="vibe-benchmark")
+    parser.add_argument("--models", required=True,
+                        help="Comma-separated litellm-format specs, e.g. "
+                             "'gemini/gemini-3.1-flash-lite,openai/gpt-5.2-mini'")
+    parser.add_argument("--snapshots", type=Path, default=Path("evals/snapshots"))
+    parser.add_argument("--reports-dir", type=Path, default=Path("data/reports"))
+    parser.add_argument("--output-md", type=Path, default=Path("evals/BENCHMARK.md"))
+    parser.add_argument("--throttle-seconds", type=float, default=4.5)
+    parser.add_argument("--max-workers", type=int, default=6)
+    parser.add_argument("--analyst-path", choices=["snapshot", "tool-loop"],
+                        default="tool-loop",
+                        help="tool-loop (default) benchmarks the production path.")
+    args = parser.parse_args(argv)
+
+    specs = [s.strip() for s in args.models.split(",") if s.strip()]
+
+    # Fairness preflight 1: the judge must be pinned, or each contestant would
+    # grade its own homework (scorer falls back to the client's model).
+    judge_model = os.getenv("EVAL_JUDGE_MODEL")
+    if not judge_model:
+        print("ERROR: EVAL_JUDGE_MODEL must be set for a benchmark run so every "
+              "model is graded by the same judge. It must be a model hosted by "
+              "the ambient LLM_PROVIDER.", file=sys.stderr)
+        return 2
+
+    # Fairness preflight 2: fail fast on missing API keys, before burning any calls.
+    missing = []
+    for spec in specs:
+        provider, _ = parse_model_spec(spec)
+        key_env = _PROVIDER_API_KEY_ENV.get(provider)
+        if key_env and not os.getenv(key_env):
+            missing.append(f"{provider}: {key_env}")
+    if missing:
+        print(f"ERROR: missing API key env vars: {', '.join(sorted(set(missing)))}",
+              file=sys.stderr)
+        return 2
+
+    if args.throttle_seconds > 0:
+        os.environ["LLM_MIN_CALL_INTERVAL_SECONDS"] = str(args.throttle_seconds)
+
+    cases = load_cases(args.snapshots)
+    if not cases:
+        print(f"ERROR: no cases found in {args.snapshots}", file=sys.stderr)
+        return 1
+
+    # Build the judge ONCE, before any model_env mutation: its LLMClient captures
+    # the ambient provider now, so per-model env swaps cannot reroute it.
+    judge = build_judge()
+
+    entries: list[BenchmarkEntry] = []
+    for spec in specs:
+        provider, model = parse_model_spec(spec)
+        logger.info(f"Benchmarking {spec} over {len(cases)} cases "
+                    f"({args.analyst_path} path)...")
+        report, events = run_model(spec, cases, judge,
+                                   args.max_workers, args.analyst_path)
+        entries.append(build_entry(get_litellm_model_string(provider, model),
+                                   report, events))
+
+    run_at_iso = datetime.now(timezone.utc).isoformat()
+    report_path = write_benchmark_report(entries, judge_model, args.reports_dir)
+    md = render_markdown(entries, judge_model, run_at_iso)
+    args.output_md.parent.mkdir(parents=True, exist_ok=True)
+    args.output_md.write_text(md)
+    print(md)
+    print(f"JSON report: {report_path}")
+    print(f"Markdown table: {args.output_md}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

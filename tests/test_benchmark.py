@@ -1,15 +1,19 @@
+import json
 import os
 import threading
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from vibe_trading.agents.cost import CostEvent
+from vibe_trading.eval import benchmark
+from vibe_trading.eval.benchmark import (
+    BenchmarkEntry, InMemoryCostSink, build_entry, model_env, parse_model_spec,
+    render_markdown, sort_entries, write_benchmark_report,
+)
 from vibe_trading.eval.report import SuiteReport
 from vibe_trading.eval.scorer import CaseScore
-from vibe_trading.eval.benchmark import (
-    InMemoryCostSink, parse_model_spec, build_entry, BenchmarkEntry,
-)
 
 
 def make_event(model: str, cost: float = 0.01, tokens: int = 1000,
@@ -70,14 +74,6 @@ def test_build_entry_zero_cost_gives_none_score_per_dollar():
     assert entry.mean_latency_ms == 0.0
 
 
-from pathlib import Path
-import json
-
-from vibe_trading.eval.benchmark import (
-    sort_entries, render_markdown, write_benchmark_report,
-)
-
-
 def make_entry(model: str, overall: float, cost: float) -> BenchmarkEntry:
     return BenchmarkEntry(
         model=model, case_count=34, overall_score=overall, analyst_score=overall,
@@ -115,9 +111,6 @@ def test_write_benchmark_report_round_trips(tmp_path: Path):
     assert data["entries"][0]["score_per_dollar"] == pytest.approx(8.0)
 
 
-from vibe_trading.eval.benchmark import model_env
-
-
 def test_model_env_sets_and_restores(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.setenv("LLM_MODEL", "original-model")
@@ -139,3 +132,65 @@ def test_model_env_restores_on_exception(monkeypatch):
         with model_env("groq", "llama-4-70b"):
             raise RuntimeError("boom")
     assert os.environ["LLM_PROVIDER"] == "gemini"
+
+
+def test_main_refuses_without_judge_model(monkeypatch, capsys):
+    monkeypatch.delenv("EVAL_JUDGE_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    rc = benchmark.main(["--models", "gemini/gemma-4-31b-it"])
+    assert rc == 2
+    assert "EVAL_JUDGE_MODEL" in capsys.readouterr().err
+
+
+def test_main_refuses_on_missing_api_key(monkeypatch, capsys):
+    monkeypatch.setenv("EVAL_JUDGE_MODEL", "gemini-3.1-flash-lite")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    rc = benchmark.main(["--models", "gemini/gemma-4-31b-it,openai/gpt-5.2-mini"])
+    assert rc == 2
+    assert "OPENAI_API_KEY" in capsys.readouterr().err
+
+
+def test_main_happy_path_writes_outputs(monkeypatch, tmp_path):
+    monkeypatch.setenv("EVAL_JUDGE_MODEL", "gemini-3.1-flash-lite")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    fake_report = make_report(overall=0.8)
+    fake_events = [make_event("gemini/gemma-4-31b-it", cost=0.02)]
+    monkeypatch.setattr(benchmark, "load_cases", lambda p: ["case"] * 3)
+    monkeypatch.setattr(benchmark, "build_judge", lambda: (lambda text, rubric: None))
+    monkeypatch.setattr(benchmark, "run_model",
+                        lambda spec, cases, judge, max_workers, analyst_path:
+                        (fake_report, fake_events))
+
+    out_md = tmp_path / "BENCHMARK.md"
+    rc = benchmark.main([
+        "--models", "gemini/gemma-4-31b-it",
+        "--reports-dir", str(tmp_path),
+        "--output-md", str(out_md),
+    ])
+    assert rc == 0
+    assert out_md.exists()
+    assert "gemma-4-31b-it" in out_md.read_text()
+    assert list(tmp_path.glob("benchmark-*.json"))
+
+
+def test_run_model_installs_and_clears_cost_sink(monkeypatch):
+    from vibe_trading.agents.client import LLMClient
+    installed = []
+    monkeypatch.setattr(LLMClient, "set_cost_sink",
+                        classmethod(lambda cls, s: installed.append(s)))
+    monkeypatch.setattr(benchmark, "run_case",
+                        lambda case, db, analyst_path: None)
+    monkeypatch.setattr(benchmark, "score_case",
+                        lambda result, case, judge: CaseScore(
+                            case_id="c1", schema_ok=True, field_scores=[],
+                            analyst_score=1.0, trader_score=1.0, total_score=1.0))
+    monkeypatch.setattr(benchmark, "Database", lambda: object())
+    report, events = benchmark.run_model(
+        "gemini/gemma-4-31b-it", cases=[type("C", (), {"id": "c1"})()],
+        judge=lambda t, r: None, max_workers=1, analyst_path="snapshot")
+    assert report.case_count == 1
+    # first call installs the InMemoryCostSink, last call clears it back to None
+    assert isinstance(installed[0], InMemoryCostSink)
+    assert installed[-1] is None
