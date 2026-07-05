@@ -189,6 +189,10 @@ def translate_query(sql: str) -> str:
     elif "INSERT OR IGNORE INTO llm_cost_log" in sql:
         sql = sql.replace("INSERT OR IGNORE INTO llm_cost_log", "INSERT INTO llm_cost_log")
         sql += " ON CONFLICT (call_id) DO NOTHING"
+    elif "INSERT OR IGNORE INTO decision_scores" in sql:
+        sql = sql.replace("INSERT OR IGNORE INTO decision_scores",
+                          "INSERT INTO decision_scores")
+        sql += " ON CONFLICT (decision_id) DO NOTHING"
     elif "INSERT OR REPLACE INTO open_positions" in sql:
         sql = sql.replace("INSERT OR REPLACE INTO open_positions", "INSERT INTO open_positions")
         sql += """ ON CONFLICT (symbol) DO UPDATE SET
@@ -382,6 +386,22 @@ class PostgresDatabase:
                     entry_price DOUBLE PRECISION,
                     setup_text TEXT,
                     embedding DOUBLE PRECISION[]
+                )
+            """)
+            # Online-eval scores: one row per scored decision (see eval/online.py).
+            # outcome_* is deterministic (PnL / counterfactual forward return);
+            # judge_* is the sampled generic-rubric LLM judge, filled in later.
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS decision_scores (
+                    decision_id VARCHAR PRIMARY KEY,
+                    scored_at TIMESTAMP,
+                    kind VARCHAR,                    -- 'closed' | 'counterfactual'
+                    outcome_pct DOUBLE PRECISION,    -- signed % in the decision's favor (raw move for flat)
+                    outcome_score DOUBLE PRECISION,  -- [0,1]
+                    judge_score DOUBLE PRECISION,    -- [0,1], NULL until sampled
+                    judge_note TEXT,
+                    judged_at TIMESTAMP,
+                    prompt_version VARCHAR           -- copied from decision_log at scoring time
                 )
             """)
             # Idempotent column migrations for pre-existing Supabase tables.
