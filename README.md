@@ -325,6 +325,23 @@ fresh checkout, run with `--update-baseline` once. If your provider has a tight
 **token** cap (e.g. Groq's TPD), prefer Gemma; if it has a tight **request** cap,
 raise `--throttle-seconds` so the per-minute bucket has time to refill.
 
+### Model benchmark matrix
+
+Run the full golden-set suite across several models and compare quality vs cost:
+
+    EVAL_JUDGE_MODEL=gemini-3.1-flash-lite \
+    python -m vibe_trading.eval.benchmark \
+      --models "gemini/gemini-3.1-flash-lite,gemini/gemma-4-31b-it" \
+      --throttle-seconds 4.5
+
+- `EVAL_JUDGE_MODEL` is **required** (and pinned for the whole run) so every model
+  is graded by the same judge — the scorer's per-run fallback would otherwise let
+  each contestant grade its own homework.
+- The judge must be hosted by the ambient `LLM_PROVIDER` at launch.
+- Results: a timestamped JSON report under `data/reports/` and a regenerated
+  [evals/BENCHMARK.md](evals/BENCHMARK.md) table (sorted by score-per-dollar).
+- The committed regression baseline (`evals/baseline.json`) is never touched.
+
 ## Cost Tracking
 
 Every LLM call's tokens, dollar cost, and latency are logged to the `llm_cost_log`
