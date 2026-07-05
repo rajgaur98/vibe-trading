@@ -9,7 +9,18 @@ A 'correct' flat is scored as 'no strong move happened' — a proxy for 'no edge
 existed', not ground truth (a flat that dodged a crash scores poorly here). The
 caveat is deliberate and documented; deterministic beats clever.
 """
+import json
 import logging
+import os
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Callable, Optional
+
+from pydantic import BaseModel
+
+from vibe_trading.agents import prompts
+from vibe_trading.agents.cost import daily_summary, should_block_trading
+from vibe_trading.journal import COUNTERFACTUAL_HORIZON_CANDLES, _CANDLE_HOURS
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +46,6 @@ def flat_score(move_pct: float) -> float:
     if m >= FLAT_ZERO_PCT:
         return 0.0
     return 1.0 - (m - FLAT_OK_PCT) / (FLAT_ZERO_PCT - FLAT_OK_PCT)
-
-
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Callable, Optional
-
-from vibe_trading.journal import COUNTERFACTUAL_HORIZON_CANDLES, _CANDLE_HOURS
 
 
 @dataclass
@@ -214,14 +218,6 @@ class OutcomeScorer:
             pg.close()
 
 
-import json
-import os
-
-from pydantic import BaseModel
-
-from vibe_trading.agents import prompts
-from vibe_trading.agents.cost import daily_summary, should_block_trading
-
 ONLINE_JUDGE_DAILY_CAP = int(os.getenv("ONLINE_JUDGE_DAILY_CAP", "5"))
 
 
@@ -392,3 +388,67 @@ def format_digest(d: dict) -> str:
         lines.append(f"  · `{row['prompt_version']}`: "
                      f"{row['outcome_mean']:.2f} (n={row['count']})")
     return "\n".join(lines)
+
+
+def run_scoring_pass(judge: bool = True) -> dict:
+    """One full online-eval pass: outcome scoring, then (optionally) the sampled
+    judge. Installs the Postgres cost sink so judge calls are metered like every
+    other LLM call. Never raises."""
+    from vibe_trading.agents.client import LLMClient
+    from vibe_trading.agents.cost import PostgresCostLogger
+    try:
+        LLMClient.set_cost_sink(PostgresCostLogger())
+    except Exception as e:
+        logger.warning(f"cost sink unavailable for scoring pass (non-fatal): {e}")
+    outcomes = OutcomeScorer().run_pass()
+    judged = OnlineJudge().run_pass() if judge else 0
+    logger.info(f"online-eval pass: {outcomes} outcomes scored, {judged} judged")
+    return {"outcomes_scored": outcomes, "judged": judged}
+
+
+def main(argv: Optional[list] = None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="vibe-online-eval")
+    parser.add_argument("--digest", action="store_true",
+                        help="Also send the weekly drift digest to Discord.")
+    parser.add_argument("--no-judge", action="store_true",
+                        help="Outcome scoring only (skip the LLM judge).")
+    parser.add_argument("--judge-cap", type=int, default=None,
+                        help="Override ONLINE_JUDGE_DAILY_CAP for this run.")
+    args = parser.parse_args(argv)
+
+    if args.judge_cap is not None:
+        os.environ["ONLINE_JUDGE_DAILY_CAP"] = str(args.judge_cap)
+        global ONLINE_JUDGE_DAILY_CAP
+        ONLINE_JUDGE_DAILY_CAP = args.judge_cap
+
+    result = run_scoring_pass(judge=not args.no_judge)
+    print(f"outcomes scored: {result['outcomes_scored']}, "
+          f"judged: {result['judged']}")
+
+    if args.digest:
+        from vibe_trading.data.db import PostgresDatabase
+        from vibe_trading.runtime import monitoring
+        try:
+            pg = PostgresDatabase()
+            pg.connect()
+            try:
+                digest = weekly_digest(pg.conn)
+            finally:
+                pg.close()
+            monitoring.send_discord(format_digest(digest))
+            print("digest sent")
+        except Exception as e:
+            logger.warning(f"digest failed (non-fatal): {e}")
+
+    try:
+        from langfuse import get_client
+        get_client().flush()
+    except Exception:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

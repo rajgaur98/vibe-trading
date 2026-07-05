@@ -359,6 +359,23 @@ Changing a prompt:
 3. Run the eval regression gate (`python -m vibe_trading.eval.eval`); re-seed via
    `--update-baseline` only for a reviewed, intentional change.
 
+### Online evaluation
+
+Live decisions are scored once their outcome is knowable — realized PnL for
+decisions that became trades, counterfactual forward return (24h) for flat or
+risk-rejected ones — and a capped daily sample gets a generic-rubric LLM judge
+(groundedness + consistency vs the stored feature snapshot). Scores land in the
+`decision_scores` table and on each decision's Langfuse trace
+(`outcome_score`, `online_judge_score`).
+
+    python -m vibe_trading.eval.online              # score + judge (cap: ONLINE_JUDGE_DAILY_CAP, default 5)
+    python -m vibe_trading.eval.online --no-judge   # deterministic scoring only
+    python -m vibe_trading.eval.online --digest     # + weekly drift digest to Discord (cron weekly)
+
+`trade-once` runs a best-effort scoring pass automatically after each window.
+Judge calls are tagged `call_type="online_judge"` in `llm_cost_log` and respect
+`LLM_DAILY_COST_CAP_USD`.
+
 ## Cost Tracking
 
 Every LLM call's tokens, dollar cost, and latency are logged to the `llm_cost_log`

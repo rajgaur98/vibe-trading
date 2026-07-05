@@ -211,3 +211,17 @@ def test_weekly_digest_aggregates_and_formats():
     text = format_digest(d)
     assert "0.62" in text and "0.58" in text
     assert "analyst_system:v1@a" in text
+
+
+from vibe_trading.eval import online
+
+
+def test_run_scoring_pass_composes_scorer_and_judge(monkeypatch):
+    monkeypatch.setattr(online.OutcomeScorer, "run_pass", lambda self, batch_limit=200: 3)
+    monkeypatch.setattr(online.OnlineJudge, "run_pass", lambda self: 2)
+    monkeypatch.setattr(online, "PostgresCostLogger", lambda: None, raising=False)
+    from vibe_trading.agents.client import LLMClient
+    monkeypatch.setattr(LLMClient, "set_cost_sink", classmethod(lambda cls, s: None))
+    result = online.run_scoring_pass()
+    assert result == {"outcomes_scored": 3, "judged": 2}
+    assert online.run_scoring_pass(judge=False) == {"outcomes_scored": 3, "judged": 0}

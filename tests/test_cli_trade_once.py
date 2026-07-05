@@ -21,6 +21,10 @@ def _patch(monkeypatch, evaluate_raises=False):
     monkeypatch.setattr(cli.state_sync, "push", lambda: calls.append("push"))
     monkeypatch.setattr(cli.monitoring, "ping_healthcheck", lambda success=True: calls.append(f"ping:{success}"))
     monkeypatch.setattr(cli, "_flush_langfuse", lambda: calls.append("flush"))
+    monkeypatch.setattr(
+        "vibe_trading.eval.online.run_scoring_pass",
+        lambda: calls.append("scoring") or {"outcomes_scored": 0, "judged": 0},
+    )
     return calls
 
 
@@ -41,3 +45,20 @@ def test_execute_trade_once_pushes_even_on_failure(monkeypatch):
         pass
     assert "ping:True" not in calls      # NOT pinged => dead-man's-switch fires
     assert calls[-1] == "push"           # still pushed in finally
+
+
+def test_trade_once_runs_online_scoring_best_effort(monkeypatch):
+    """execute_trade_once triggers a scoring pass after evaluation, and a scoring
+    crash does not break the trade window."""
+    calls = _patch(monkeypatch)
+    boom_calls = []
+
+    def boom():
+        boom_calls.append(1)
+        raise RuntimeError("scoring down")
+
+    monkeypatch.setattr("vibe_trading.eval.online.run_scoring_pass", boom)
+    cli.execute_trade_once([])   # must not raise
+    assert boom_calls, "scoring pass was never attempted"
+    assert "ping:True" in calls          # scoring failure did not block success ping
+    assert calls[-1] == "push"

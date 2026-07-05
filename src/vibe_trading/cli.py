@@ -38,6 +38,15 @@ def execute_trade_once(symbols):
     try:
         scheduler = TradingScheduler(symbols)
         scheduler.sync_and_evaluate()
+
+        # Online evals (best-effort): score decisions whose outcomes just became
+        # knowable. A scoring failure must never fail the trade window.
+        try:
+            from vibe_trading.eval.online import run_scoring_pass
+            run_scoring_pass()
+        except Exception as e:
+            logger.warning(f"online scoring pass failed (non-fatal): {e}")
+
         monitoring.ping_healthcheck(success=True)
     finally:
         _flush_langfuse()
