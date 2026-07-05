@@ -67,3 +67,48 @@ def test_build_entry_zero_cost_gives_none_score_per_dollar():
     assert entry.cost_usd == 0.0
     assert entry.score_per_dollar is None
     assert entry.mean_latency_ms == 0.0
+
+
+from pathlib import Path
+import json
+
+from vibe_trading.eval.benchmark import (
+    sort_entries, render_markdown, write_benchmark_report,
+)
+
+
+def make_entry(model: str, overall: float, cost: float) -> BenchmarkEntry:
+    return BenchmarkEntry(
+        model=model, case_count=34, overall_score=overall, analyst_score=overall,
+        trader_score=overall, pass_rate=0.1, schema_failures=0, judge_errors=0,
+        calls=100, total_tokens=50000, cost_usd=cost, judge_cost_usd=0.01,
+        mean_latency_ms=800.0,
+        score_per_dollar=(overall / cost) if cost > 0 else None,
+    )
+
+
+def test_sort_entries_by_score_per_dollar_none_last():
+    cheap_good = make_entry("g/cheap", 0.80, 0.10)     # spd 8.0
+    pricey_good = make_entry("o/pricey", 0.85, 0.50)   # spd 1.7
+    free_bad = make_entry("g/free", 0.60, 0.0)         # spd None
+    ordered = sort_entries([free_bad, pricey_good, cheap_good])
+    assert [e.model for e in ordered] == ["g/cheap", "o/pricey", "g/free"]
+
+
+def test_render_markdown_has_header_and_all_models():
+    md = render_markdown([make_entry("g/a", 0.8, 0.1)], judge_model="gemini-3.1-flash-lite",
+                         run_at_iso="2026-07-05T00:00:00Z")
+    assert "| Model |" in md
+    assert "g/a" in md
+    assert "gemini-3.1-flash-lite" in md   # judge disclosure
+    assert "2026-07-05" in md              # run date disclosure
+
+
+def test_write_benchmark_report_round_trips(tmp_path: Path):
+    entries = [make_entry("g/a", 0.8, 0.1)]
+    path = write_benchmark_report(entries, judge_model="j-model", reports_dir=tmp_path)
+    assert path.name.startswith("benchmark-") and path.suffix == ".json"
+    data = json.loads(path.read_text())
+    assert data["judge_model"] == "j-model"
+    assert data["entries"][0]["model"] == "g/a"
+    assert data["entries"][0]["score_per_dollar"] == pytest.approx(8.0)
