@@ -291,6 +291,7 @@ class PostgresConnectionWrapper:
 class PostgresDatabase:
     """Manages thread-safe connection pool to Supabase Postgres."""
     _pool = None
+    _schema_ready = False      # _create_tables() DDL has succeeded once this process
     pgvector_enabled = False   # extension present + column migrated to vector
     pgvector_halfvec = False   # halfvec type available (pgvector >= 0.7) -> HNSW index built
 
@@ -306,56 +307,132 @@ class PostgresDatabase:
         self._create_tables()
 
     def _initialize_pool(self):
-        """Initializes a shared ThreadedConnectionPool."""
+        """Initializes a shared ThreadedConnectionPool.
+
+        TCP keepalives are enabled so the OS probes idle connections and the
+        client notices a server-side close quickly, instead of letting Supabase
+        silently reap long-lived idle connections and leave dead sockets in the
+        pool (the recurring dashboard-500 incident). psycopg2 forwards these
+        kwargs to libpq's connect.
+        """
         if PostgresDatabase._pool is None:
             try:
                 logger.info("Initializing ThreadedConnectionPool to Supabase Postgres...")
                 # Min 1, Max 15 connections
-                PostgresDatabase._pool = ThreadedConnectionPool(1, 15, self.db_url)
+                PostgresDatabase._pool = ThreadedConnectionPool(
+                    1, 15, self.db_url,
+                    keepalives=1,
+                    keepalives_idle=30,
+                    keepalives_interval=10,
+                    keepalives_count=5,
+                )
             except Exception as e:
                 logger.error(f"Failed to initialize Postgres connection pool: {e}")
                 raise
 
-    def connect(self):
-        """Acquires a connection from the pool and wraps it."""
-        if self.conn is None:
+    def connect(self, retries: int = 3):
+        """Acquires a *live* connection from the pool and wraps it.
+
+        Supabase periodically closes long-lived idle connections server-side.
+        The pool has no idea and hands the dead socket straight back out, so the
+        first query fails with "server closed the connection unexpectedly" and,
+        worse, the dead connection gets returned to the pool and poisons every
+        subsequent request. To avoid that we pre-ping each acquired connection
+        with `SELECT 1`; a dead one is discarded (`putconn(..., close=True)`) and
+        we retry with a fresh connection.
+        """
+        if self.conn is not None:
+            return
+
+        last_err = None
+        for attempt in range(retries):
+            raw_conn = PostgresDatabase._pool.getconn()
             try:
-                raw_conn = PostgresDatabase._pool.getconn()
-                self.conn = PostgresConnectionWrapper(raw_conn)
-                if PostgresDatabase.pgvector_enabled:
-                    try:
-                        from pgvector.psycopg2 import register_vector
-                        register_vector(raw_conn)  # idempotent per connection
-                    except Exception as e:
-                        logger.warning(f"pgvector register_vector failed (non-fatal): {e}")
-                logger.info("Acquired connection from Postgres pool.")
+                cur = raw_conn.cursor()
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                cur.close()
             except Exception as e:
-                logger.error(f"Failed to get connection from pool: {e}")
-                raise
+                # Dead/stale connection: discard it from the pool and try again.
+                last_err = e
+                try:
+                    PostgresDatabase._pool.putconn(raw_conn, close=True)
+                except Exception:
+                    pass
+                logger.warning(
+                    f"Discarded a dead pooled connection "
+                    f"(attempt {attempt + 1}/{retries}): {e}")
+                continue
+
+            # Live connection.
+            self.conn = PostgresConnectionWrapper(raw_conn)
+            if PostgresDatabase.pgvector_enabled:
+                try:
+                    from pgvector.psycopg2 import register_vector
+                    register_vector(raw_conn)  # idempotent per connection
+                except Exception as e:
+                    logger.warning(f"pgvector register_vector failed (non-fatal): {e}")
+            logger.info("Acquired live connection from Postgres pool.")
+            return
+
+        logger.error(
+            f"Failed to acquire a live Postgres connection after {retries} attempts: {last_err}")
+        raise last_err if last_err is not None else psycopg2.OperationalError(
+            "Could not acquire a live connection from the Postgres pool")
 
     def close(self):
-        """Returns the connection back to the pool."""
+        """Returns the connection to the pool, discarding it if it is broken.
+
+        A connection whose commit fails, or whose underlying socket libpq has
+        marked closed, must NOT be handed back to the pool alive — that is how a
+        single Supabase-dropped connection used to poison every later request.
+        Such connections are returned with `close=True` so the pool drops them.
+        """
         if self.conn:
+            raw_conn = self.conn.connection
+            broken = False
+
             try:
                 # Commit any uncommitted transactions before returning
                 self.conn.commit()
             except Exception:
+                broken = True
                 try:
                     self.conn.rollback()
                 except Exception:
                     pass
-            
+
             try:
                 self.conn.close()
-                PostgresDatabase._pool.putconn(self.conn.connection)
-                logger.info("Returned connection to Postgres pool.")
+            except Exception:
+                pass
+
+            # libpq marks .closed nonzero once the connection is broken/closed.
+            if getattr(raw_conn, "closed", 0):
+                broken = True
+
+            try:
+                PostgresDatabase._pool.putconn(raw_conn, close=broken)
+                if broken:
+                    logger.warning("Discarded a broken connection from the Postgres pool.")
+                else:
+                    logger.info("Returned connection to Postgres pool.")
             except Exception as e:
                 logger.error(f"Error returning connection to pool: {e}")
             finally:
                 self.conn = None
 
     def _create_tables(self):
-        """Creates the relational/state tables if they do not exist on Supabase."""
+        """Creates the relational/state tables if they do not exist on Supabase.
+
+        The DDL is idempotent but expensive (many remote round-trips + the
+        pgvector probe). It only needs to run once per process, so subsequent
+        constructions of PostgresDatabase short-circuit here — this is what
+        removes the multi-second latency that used to be paid on *every* API
+        request that opened a connection via get_pg_conn().
+        """
+        if PostgresDatabase._schema_ready:
+            return
         self.connect()
         try:
             self.conn.execute("""
@@ -472,6 +549,7 @@ class PostgresDatabase:
             self._enable_pgvector()
 
             self.conn.commit()
+            PostgresDatabase._schema_ready = True
             logger.info("Supabase Postgres tables verified successfully.")
         except Exception as e:
             logger.error(f"Failed to verify/create Supabase Postgres tables: {e}")
