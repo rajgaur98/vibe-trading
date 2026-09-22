@@ -70,9 +70,24 @@ class TradingScheduler:
         downtime, so the 4h cron fires at 00:01/04:01/.../20:01 UTC regardless of
         the host's timezone."""
         scheduler = BlockingScheduler(timezone="UTC")
-        scheduler.add_job(self.sync_and_evaluate, "cron", hour="*/4", minute=1,
+        scheduler.add_job(self._tick, "cron", hour="*/4", minute=1,
                           coalesce=True, misfire_grace_time=3600)
         return scheduler
+
+    def _tick(self):
+        """One live execution window: evaluate, then run the online-eval scoring pass.
+
+        Mirrors cli.execute_trade_once so the deployed `live` loop scores matured
+        decisions every tick — not only the `trade-once` path. Without this the online
+        feedback loop (decision_scores, drift digest, RAG precedent quality) is inert in
+        production. Scoring is best-effort: a scoring failure must never fail the trade
+        tick, which has already completed and persisted its side effects."""
+        self.sync_and_evaluate()
+        try:
+            from vibe_trading.eval.online import run_scoring_pass
+            run_scoring_pass()
+        except Exception as e:
+            logger.warning(f"online scoring pass failed (non-fatal): {e}")
 
     def start(self):
         """Starts the main scheduling loop."""
@@ -80,9 +95,9 @@ class TradingScheduler:
         #    Stream is live immediately — not gated behind the slow initial sync below.
         self.ws_listener = self._maybe_start_ws_listener()
 
-        # 2. Run immediate bootstrap/sync on startup
+        # 2. Run immediate bootstrap/sync + scoring on startup
         logger.info("Initializing startup data synchronization...")
-        self.sync_and_evaluate()
+        self._tick()
 
         # 3. Setup recurring 4-hour scheduler (UTC-pinned; see _build_scheduler)
         scheduler = self._build_scheduler()

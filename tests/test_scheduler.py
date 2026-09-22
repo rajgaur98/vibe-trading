@@ -265,6 +265,52 @@ def test_build_scheduler_is_utc():
     assert str(sched.timezone) == "UTC"
 
 
+def test_tick_runs_online_scoring_after_evaluate(monkeypatch):
+    """The deployed `live` loop must score matured decisions every tick, not only the
+    `trade-once` CLI path. _tick() runs sync_and_evaluate and then a scoring pass."""
+    import vibe_trading.eval.online as online_mod
+    from vibe_trading.runtime.scheduler import TradingScheduler
+
+    calls = []
+    sched = TradingScheduler.__new__(TradingScheduler)
+    sched.sync_and_evaluate = lambda: calls.append("evaluate")
+    monkeypatch.setattr(online_mod, "run_scoring_pass",
+                        lambda *a, **k: (calls.append("score"), {"outcomes_scored": 0, "judged": 0})[1])
+
+    sched._tick()
+
+    assert calls == ["evaluate", "score"]  # evaluate first, then score
+
+
+def test_build_scheduler_cron_runs_the_full_tick():
+    """The 4h cron must target the full tick (evaluate + score). If it targeted
+    sync_and_evaluate directly, the live deployment would silently never score."""
+    from vibe_trading.runtime.scheduler import TradingScheduler
+    s = TradingScheduler.__new__(TradingScheduler)
+    sched = s._build_scheduler()
+    jobs = sched.get_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].func.__name__ == "_tick"
+
+
+def test_tick_scoring_failure_does_not_break_the_loop(monkeypatch):
+    """A scoring failure must never fail the trade tick — evaluate already happened."""
+    import vibe_trading.eval.online as online_mod
+    from vibe_trading.runtime.scheduler import TradingScheduler
+
+    calls = []
+    sched = TradingScheduler.__new__(TradingScheduler)
+    sched.sync_and_evaluate = lambda: calls.append("evaluate")
+
+    def _boom(*a, **k):
+        raise RuntimeError("scoring exploded")
+    monkeypatch.setattr(online_mod, "run_scoring_pass", _boom)
+
+    sched._tick()  # must not raise
+
+    assert calls == ["evaluate"]
+
+
 # --- decision_log prompt_version stamping ---
 
 def test_decision_log_insert_carries_bundle_prompt_version(monkeypatch):
