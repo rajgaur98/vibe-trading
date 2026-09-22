@@ -167,11 +167,34 @@ def get_costs():
     except Exception:
         return default
 
+def _annotate_intended_stops(positions):
+    """Add `stop_live` and, when the exchange stop is gone, `intended_stop_price` (the stop
+    recorded in the ledger at entry) to each LIVE_TESTNET dashboard row. Lets the UI tell
+    "never had a stop" apart from "stop was placed but is no longer live on the exchange" —
+    i.e. a NAKED position — instead of both showing a bare dash. Best-effort: any error
+    leaves the rows unchanged."""
+    intended = {}
+    try:
+        with get_pg_conn() as conn:
+            for r in conn.execute("SELECT symbol, stop_price FROM open_positions").fetchall():
+                intended[r[0]] = r[1]
+    except Exception:
+        intended = {}
+    for p in positions:
+        try:
+            p["stop_live"] = p.get("stop_price") is not None
+            if not p["stop_live"]:
+                p["intended_stop_price"] = intended.get(p.get("symbol"))
+        except Exception:
+            pass
+
+
 @app.get("/api/positions")
 def get_positions():
     if os.getenv("TRADING_MODE", "PAPER").upper() == "LIVE_TESTNET":
         live = live_testnet_positions()
         if live is not None:
+            _annotate_intended_stops(live)
             return live
         # else: fall through to the Postgres ledger path below
 

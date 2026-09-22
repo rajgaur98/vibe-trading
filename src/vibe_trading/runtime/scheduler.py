@@ -149,6 +149,26 @@ class TradingScheduler:
                 closed_trades = self.broker.update_positions(current_prices)
                 self._record_closed_trades(closed_trades)
 
+                # 2b. Re-arm any protective stop that died on the exchange mid-life so a
+                # position can't silently go naked between ticks (LIVE_TESTNET only; paper/
+                # backtest brokers don't implement reconcile_brackets). Runs AFTER the close
+                # reconcile so only still-open positions are checked. Fail-open: never let a
+                # bracket-reconcile error break the trading loop.
+                if hasattr(self.broker, "reconcile_brackets"):
+                    try:
+                        for a in self.broker.reconcile_brackets():
+                            if a.get("action") == "rearmed":
+                                self._send_discord_alert(
+                                    f"🛡️ **STOP RE-ARMED:** {a['symbol']} had no live stop on "
+                                    f"the exchange; re-placed @ ${a.get('stop_price')}.")
+                            elif a.get("action") == "naked":
+                                self._send_discord_alert(
+                                    f"🚨 **NAKED POSITION:** {a['symbol']} has NO live stop and "
+                                    f"could not be re-armed (intended ${a.get('intended_stop_price')}). "
+                                    f"Manual intervention required.")
+                    except Exception as e:
+                        logger.error(f"Bracket reconcile failed (non-fatal): {e}")
+
                 # Snapshot live equity each tick (LIVE_TESTNET) so the dashboard's
                 # balance/equity/drawdown reflect the real demo account, not the stale
                 # paper portfolio_state. PaperBroker maintains portfolio_state itself.

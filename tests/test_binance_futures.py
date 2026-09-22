@@ -511,3 +511,127 @@ def test_update_positions_idempotent_under_concurrent_claim():
     second = broker.update_positions({})
     assert len(first) == 1 and first[0]["symbol"] == "BTC/USDT"
     assert second == []  # not recorded twice
+
+
+# --- _build_closed_trade fill-window clamp (delayed closes) ---
+
+def test_build_closed_trade_clamps_fill_window_for_old_positions():
+    """A position closed weeks after entry: `since` must be clamped into Binance's ~7-day
+    userTrades window (not the entry time), or the closing fills come back empty and we'd
+    record a bogus close=entry / pnl=0 trade."""
+    import time as _time
+    ex = _mock_exchange()
+    captured = {}
+
+    def _fetch(sym, since=None, **kw):
+        captured["since"] = since
+        # a real closing fill for a short (exit_side == "buy")
+        return [{"side": "buy", "price": 150.0, "amount": 10.0, "fee": {"cost": 0.5}}]
+
+    ex.fetch_my_trades.side_effect = _fetch
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+
+    old_entry = _dt(2026, 6, 1)  # ~months before "now"
+    trade = broker._build_closed_trade({
+        "symbol": "BTC/USDT", "side": "short", "entry_time": old_entry,
+        "entry_price": 200.0, "size_usd": 2000.0, "decision_id": "d1",
+    })
+
+    now_ms = int(_time.time() * 1000)
+    entry_ms = int(old_entry.timestamp() * 1000)
+    # clamp kicked in: since is recent (~now-6d), NOT the months-old entry time
+    assert captured["since"] > entry_ms
+    assert captured["since"] >= now_ms - 8 * 24 * 3600 * 1000
+    # and the real fill was used (short: qty=2000/200=10, (200-150)*10 - 0.5 = 499.5)
+    assert trade["close_price"] == 150.0
+    assert round(trade["realized_pnl"], 2) == 499.5
+    assert trade["result"] == "win"
+
+
+def test_build_closed_trade_recent_entry_uses_entry_time():
+    """A position opened inside the window keeps entry_time as `since` (unchanged behavior)."""
+    import time as _time
+    ex = _mock_exchange()
+    captured = {}
+    ex.fetch_my_trades.side_effect = lambda sym, since=None, **kw: captured.__setitem__("since", since) or []
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+
+    recent_entry = _dt.utcnow()
+    broker._build_closed_trade({
+        "symbol": "BTC/USDT", "side": "long", "entry_time": recent_entry,
+        "entry_price": 100.0, "size_usd": 1000.0,
+    })
+    assert abs(captured["since"] - int(recent_entry.timestamp() * 1000)) < 5000
+
+
+# --- reconcile_brackets (naked-position monitor) ---
+
+def _open_short(sym="BTC/USDT:USDT", entry=100.0, mark=120.0):
+    return {"symbol": sym, "contracts": 1.0, "side": "short", "entryPrice": entry, "markPrice": mark}
+
+
+def test_reconcile_brackets_rearms_missing_stop_from_ledger():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [_open_short()]
+    # only a TAKE_PROFIT resting (trig below entry for a short) → NO live stop
+    ex.fetch_open_orders.return_value = [{"triggerPrice": 80.0}]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker._load_ledger = lambda: [{
+        "symbol": "BTC/USDT", "side": "short", "entry_time": _dt(2026, 6, 1),
+        "entry_price": 100.0, "size_usd": 1000.0, "stop_price": 110.0, "take_profit_price": 80.0,
+    }]
+
+    actions = broker.reconcile_brackets()
+
+    assert actions == [{"symbol": "BTC/USDT", "action": "rearmed", "stop_price": 110.0}]
+    # a STOP_MARKET closePosition buy (short exit) was placed at the ledger stop
+    stop_call = ex.create_order.call_args_list[-1]
+    assert stop_call.args[1] == "STOP_MARKET"
+    assert stop_call.args[2] == "buy"
+    assert stop_call.kwargs["params"]["closePosition"] is True
+
+
+def test_reconcile_brackets_noop_when_stop_present():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [_open_short()]
+    # a resting STOP (trig above entry for a short) → protected, nothing to do
+    ex.fetch_open_orders.return_value = [{"triggerPrice": 110.0}, {"triggerPrice": 80.0}]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker._load_ledger = lambda: [{"symbol": "BTC/USDT", "side": "short",
+                                    "entry_time": _dt(2026, 6, 1), "entry_price": 100.0,
+                                    "size_usd": 1000.0, "stop_price": 110.0, "take_profit_price": 80.0}]
+    assert broker.reconcile_brackets() == []
+    ex.create_order.assert_not_called()
+
+
+def test_reconcile_brackets_alarms_naked_when_no_ledger_stop(caplog):
+    import logging
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [_open_short()]
+    ex.fetch_open_orders.return_value = [{"triggerPrice": 80.0}]  # TP only → no stop
+    broker = BinanceFuturesBroker(db=None, exchange=ex)  # db None → empty ledger, no intended stop
+    with caplog.at_level(logging.CRITICAL):
+        actions = broker.reconcile_brackets()
+    assert actions == [{"symbol": "BTC/USDT", "action": "naked", "intended_stop_price": None}]
+    ex.create_order.assert_not_called()
+    assert any("NAKED POSITION" in r.message for r in caplog.records)
+
+
+def test_reconcile_brackets_skips_on_conditional_read_error():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [_open_short()]
+    ex.fetch_open_orders.side_effect = Exception("rate limit")
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    broker._load_ledger = lambda: [{"symbol": "BTC/USDT", "side": "short",
+                                    "entry_time": _dt(2026, 6, 1), "entry_price": 100.0,
+                                    "size_usd": 1000.0, "stop_price": 110.0, "take_profit_price": 80.0}]
+    assert broker.reconcile_brackets() == []
+    ex.create_order.assert_not_called()  # never act on unconfirmed bracket state
+
+
+def test_reconcile_brackets_ignores_flat_positions():
+    ex = _mock_exchange()
+    ex.fetch_positions.return_value = [{"symbol": "BTC/USDT:USDT", "contracts": 0.0}]
+    broker = BinanceFuturesBroker(db=None, exchange=ex)
+    assert broker.reconcile_brackets() == []
+    ex.fetch_open_orders.assert_not_called()

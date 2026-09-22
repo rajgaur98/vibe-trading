@@ -9,9 +9,11 @@ interface Position {
   entry_time: string;
   entry_price: number;
   size_usd: number;
-  stop_price: number | null;        // null when the exchange has no readable resting bracket
-  take_profit_price: number | null; // (e.g. an unprotected position, or brackets not found)
+  stop_price: number | null;        // live exchange stop trigger; null when no resting stop bracket
+  take_profit_price: number | null; // live exchange take-profit trigger; null when none
   current_price?: number | null;
+  stop_live?: boolean;              // is there a LIVE stop resting on the exchange?
+  intended_stop_price?: number | null; // stop recorded at entry, shown when the live stop is gone
 }
 
 export default function PositionsList({
@@ -173,11 +175,23 @@ export default function PositionsList({
                     <div className="pt-2 border-t border-slate-900/60 grid grid-cols-2 gap-2 text-[11px] font-semibold">
                       <div>
                         <p className="text-rose-500/80 font-bold">Stop Loss</p>
-                        <p className="text-slate-400 mt-0.5">
-                          {pos.stop_price != null
-                            ? `$${pos.stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                            : "—"}
-                        </p>
+                        {pos.stop_price != null ? (
+                          <p className="text-slate-400 mt-0.5">
+                            {`$${pos.stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                          </p>
+                        ) : pos.intended_stop_price != null ? (
+                          <p
+                            className="text-amber-500/90 mt-0.5 flex items-center gap-1"
+                            title="Stop was placed at entry but is no longer live on the exchange — this position is unprotected."
+                          >
+                            {`$${pos.intended_stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`}
+                            <span className="text-[9px] uppercase tracking-wide text-amber-500/80 border border-amber-500/40 rounded px-1 py-px">
+                              not live
+                            </span>
+                          </p>
+                        ) : (
+                          <p className="text-slate-400 mt-0.5">—</p>
+                        )}
                       </div>
                       <div>
                         <p className="text-emerald-500/80 font-bold">Take Profit</p>
