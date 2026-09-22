@@ -11,9 +11,11 @@ interface Position {
   entry_time: string;
   entry_price: number;
   size_usd: number;
-  stop_price: number | null;
-  take_profit_price: number | null;
+  stop_price: number | null;        // live exchange stop trigger; null when no resting stop bracket
+  take_profit_price: number | null; // live exchange take-profit trigger; null when none
   current_price?: number | null;
+  stop_live?: boolean;              // is there a LIVE stop resting on the exchange?
+  intended_stop_price?: number | null; // stop recorded at entry, shown when the live stop is gone
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -151,11 +153,26 @@ export default function PositionsList({
                 <Separator />
 
                 <div className="grid grid-cols-2 gap-x-4">
-                  <Field label="Stop Loss">
-                    {pos.stop_price != null
-                      ? `$${pos.stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`
-                      : "—"}
-                  </Field>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Stop Loss</p>
+                    {pos.stop_price != null ? (
+                      <p className="mt-0.5 text-sm font-medium text-foreground">
+                        ${pos.stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </p>
+                    ) : pos.intended_stop_price != null ? (
+                      <p
+                        className="mt-0.5 flex items-center gap-1.5 text-sm font-medium text-loss"
+                        title="Stop was placed at entry but is no longer live on the exchange — this position is unprotected."
+                      >
+                        ${pos.intended_stop_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        <span className="rounded border border-loss/40 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-loss">
+                          not live
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="mt-0.5 text-sm font-medium text-muted-foreground">—</p>
+                    )}
+                  </div>
                   <Field label="Take Profit">
                     {pos.take_profit_price != null
                       ? `$${pos.take_profit_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}`

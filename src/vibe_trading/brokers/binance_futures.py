@@ -413,6 +413,79 @@ class BinanceFuturesBroker(BaseBroker):
                              f"{row['symbol']}: {e}")
         return closed
 
+    def reconcile_brackets(self) -> List[Dict[str, Any]]:
+        """Ensure every OPEN exchange position still has a LIVE protective stop.
+
+        A protective bracket can die mid-life on the exchange (rejected, or, on demo,
+        triggered-but-never-filled), silently leaving a NAKED position with no downside
+        protection — exactly the state that shows as an em dash on the dashboard. submit_order
+        guards the ENTRY moment against this; nothing watched for it afterward. Each tick we
+        check: for every open position with no live stop, re-place the stop from the ledger's
+        recorded stop_price. If re-arming fails or the ledger has no stop, escalate to a
+        CRITICAL alarm. Never raises — returns the list of actions taken (for alerting)."""
+        ledger = {row["symbol"]: row for row in self._load_ledger()}
+        try:
+            live = self.exchange.fetch_positions()
+        except Exception as e:
+            logger.error(f"BinanceFuturesBroker: reconcile_brackets fetch_positions failed: {e}")
+            return []
+
+        actions: List[Dict[str, Any]] = []
+        for p in live:
+            if float(p.get("contracts") or 0) == 0:
+                continue
+            ccxt_sym = p.get("symbol", "")
+            plain = _to_plain_symbol(ccxt_sym)
+            side = p.get("side")
+            entry = float(p.get("entryPrice") or 0)
+            mark = float(p.get("markPrice") or 0) or None
+            ref = entry or mark or 0.0
+
+            # Is a live STOP (not merely a take-profit) still resting on the exchange? Same
+            # trigger-vs-entry classification get_open_positions uses (ccxt normalizes the
+            # conditional order type to "market", so the type string can't be trusted).
+            try:
+                stop_present = False
+                for o in self.exchange.fetch_open_orders(ccxt_sym, params={"stop": True}):
+                    trig = o.get("triggerPrice") or o.get("stopPrice")
+                    if trig is None:
+                        continue
+                    trig = float(trig)
+                    is_tp = trig <= ref if side == "short" else trig >= ref
+                    if not is_tp:
+                        stop_present = True
+                        break
+            except Exception as e:
+                # Could not confirm the bracket state — do NOT act, or a transient read
+                # error could spawn a duplicate stop. Skip and re-check next tick.
+                logger.warning(f"BinanceFuturesBroker: reconcile_brackets could not read "
+                               f"conditional orders for {plain}: {e}")
+                continue
+
+            if stop_present:
+                continue
+
+            # No live stop → the position is NAKED. Re-arm from the recorded intent.
+            row = ledger.get(plain)
+            intended = row.get("stop_price") if row else None
+            exit_side = "sell" if side == "long" else "buy"
+            if intended:
+                try:
+                    sl = self.exchange.price_to_precision(ccxt_sym, intended)
+                    self._place_close_order(ccxt_sym, "STOP_MARKET", exit_side, sl)
+                    logger.warning(f"BinanceFuturesBroker: re-armed missing stop for {plain} "
+                                   f"@ {sl} (position was unprotected).")
+                    actions.append({"symbol": plain, "action": "rearmed", "stop_price": float(sl)})
+                    continue
+                except Exception as e:
+                    logger.error(f"BinanceFuturesBroker: failed to re-arm stop for {plain}: {e}")
+
+            logger.critical(f"BinanceFuturesBroker: NAKED POSITION — {plain} has no live stop "
+                            f"and it could not be re-armed (intended={intended}); manual "
+                            f"intervention required.")
+            actions.append({"symbol": plain, "action": "naked", "intended_stop_price": intended})
+        return actions
+
     def _build_closed_trade(self, row: Dict[str, Any]) -> Dict[str, Any]:
         side = row["side"]
         entry_price = float(row["entry_price"])
@@ -423,7 +496,17 @@ class BinanceFuturesBroker(BaseBroker):
         close_price = entry_price
         realized_pnl = 0.0
         try:
-            since = int(entry_time.timestamp() * 1000) if hasattr(entry_time, "timestamp") else None
+            # Binance futures userTrades only returns fills within ~7 days of `since`. A
+            # position closed long after entry has its CLOSING fills near NOW, not near
+            # entry, so an entry-time `since` from weeks ago returns none of them and we'd
+            # record a bogus zero-PnL close. Clamp `since` into the window (never predating
+            # entry) so a delayed close is still priced from its real fills.
+            now_ms = int(time.time() * 1000)
+            window_start_ms = now_ms - 6 * 24 * 3600 * 1000
+            if hasattr(entry_time, "timestamp"):
+                since = max(int(entry_time.timestamp() * 1000), window_start_ms)
+            else:
+                since = window_start_ms
             fills = self.exchange.fetch_my_trades(_to_ccxt_symbol(row["symbol"]), since=since)
             exit_side = "sell" if side == "long" else "buy"
             closing = [f for f in fills if f.get("side") == exit_side]
