@@ -70,9 +70,36 @@ class TradingScheduler:
         downtime, so the 4h cron fires at 00:01/04:01/.../20:01 UTC regardless of
         the host's timezone."""
         scheduler = BlockingScheduler(timezone="UTC")
-        scheduler.add_job(self.sync_and_evaluate, "cron", hour="*/4", minute=1,
+        scheduler.add_job(self._tick, "cron", hour="*/4", minute=1,
                           coalesce=True, misfire_grace_time=3600)
         return scheduler
+
+    def _tick(self):
+        """One live execution window: evaluate, run the online-eval scoring pass, and
+        ping the dead-man's-switch.
+
+        Mirrors cli.execute_trade_once so the deployed `live` loop matches the trade-once
+        path: it scores matured decisions every tick (otherwise the online feedback loop —
+        decision_scores, drift digest, RAG precedent quality — is inert in production), and
+        it pings the dead-man's-switch so a *missed* tick (a stalled or crashed scheduler)
+        trips the external monitor. Before this, `live` had no silent-outage detection — a
+        multi-day stall went unnoticed while a position bled out.
+
+        Scoring is best-effort. A tick-body failure pings the /fail endpoint and is
+        swallowed so the long-running scheduler keeps ticking and retrying rather than
+        dying silently; the external monitor still alerts on the failure and on any missed
+        success ping."""
+        try:
+            self.sync_and_evaluate()
+            try:
+                from vibe_trading.eval.online import run_scoring_pass
+                run_scoring_pass()
+            except Exception as e:
+                logger.warning(f"online scoring pass failed (non-fatal): {e}")
+            monitoring.ping_healthcheck(success=True)
+        except Exception as e:
+            logger.exception(f"live tick failed: {e}")
+            monitoring.ping_healthcheck(success=False)
 
     def start(self):
         """Starts the main scheduling loop."""
@@ -80,9 +107,9 @@ class TradingScheduler:
         #    Stream is live immediately — not gated behind the slow initial sync below.
         self.ws_listener = self._maybe_start_ws_listener()
 
-        # 2. Run immediate bootstrap/sync on startup
+        # 2. Run immediate bootstrap/sync + scoring on startup
         logger.info("Initializing startup data synchronization...")
-        self.sync_and_evaluate()
+        self._tick()
 
         # 3. Setup recurring 4-hour scheduler (UTC-pinned; see _build_scheduler)
         scheduler = self._build_scheduler()

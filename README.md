@@ -260,7 +260,7 @@ The bot runs as an **always-on Docker container on an Oracle Cloud Always-Free V
 
 `restart: unless-stopped` + Docker enabled on boot means the bot survives crashes and VM reboots. **Update:** `cd ~/vibe-trading && git pull && docker compose up -d --build vibe-bot`.
 
-> **Retired:** the GitHub Actions `trade-cron.yml` cron is **not used** — GitHub's US runners are `451`-blocked by Binance. `ci.yml` still builds/tests the image, but the VM builds its own from the Dockerfile. A future hardening item is wiring the healthchecks.io dead-man's-switch into the `live` loop (currently only `trade-once` pings it).
+> **Retired:** the GitHub Actions `trade-cron.yml` cron is **not used** — GitHub's US runners are `451`-blocked by Binance. `ci.yml` still builds/tests the image, but the VM builds its own from the Dockerfile. The healthchecks.io dead-man's-switch is now wired into the `live` loop as well as `trade-once` (each healthy tick pings `HEALTHCHECK_PING_URL`; a missed ping trips the external monitor) — set `HEALTHCHECK_PING_URL` in `.env` to enable it.
 
 ---
 

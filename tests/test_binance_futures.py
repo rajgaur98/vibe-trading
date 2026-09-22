@@ -208,6 +208,48 @@ def test_get_balance_reads_usdt_total_and_tracks_peak():
     assert broker.peak_balance == 8500.0
 
 
+def _fake_db_with_peak(peak):
+    """A minimal db double whose portfolio_state MAX(peak_balance) is `peak`."""
+    fake_cur = MagicMock()
+    fake_cur.fetchone.return_value = (peak,) if peak is not None else (None,)
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value = fake_cur
+    fake_db = MagicMock()
+    fake_db.conn = fake_conn
+    return fake_db
+
+
+def test_get_balance_hydrates_peak_from_persisted_high_water_mark(monkeypatch):
+    """After a process restart the broker must seed peak_balance from the durable
+    portfolio_state high-water mark, NOT reset it to the current drawn-down balance.
+    Otherwise RiskManager computes drawdown against the already-low balance and the
+    15% circuit breaker silently can never fire."""
+    monkeypatch.setenv("BINANCE_TESTNET_DRY_RUN", "false")
+    ex = _mock_exchange()
+    ex.fetch_balance.return_value = {"USDT": {"total": 700.0}}  # deep in drawdown now
+    broker = BinanceFuturesBroker(db=_fake_db_with_peak(5000.0), exchange=ex)  # fresh instance
+
+    bal = broker.get_balance()
+
+    assert bal == 700.0
+    assert broker.peak_balance == 5000.0  # hydrated from durable store, not reset to 700
+
+
+def test_get_balance_survives_db_error_while_hydrating_peak(monkeypatch):
+    """A DB failure while reading the persisted peak must NOT break balance reads
+    (cf. the Supabase stale-pool incident): hydration is best-effort and falls back
+    to the in-memory tracker."""
+    monkeypatch.setenv("BINANCE_TESTNET_DRY_RUN", "false")
+    ex = _mock_exchange()
+    ex.fetch_balance.return_value = {"USDT": {"total": 900.0}}
+    fake_db = MagicMock()
+    fake_db.connect.side_effect = Exception("stale pool")  # DB unreachable
+    broker = BinanceFuturesBroker(db=fake_db, exchange=ex)
+
+    assert broker.get_balance() == 900.0  # does not raise
+    assert broker.peak_balance == 900.0   # falls back to in-memory high-water mark
+
+
 def test_get_open_positions_maps_exchange_and_brackets():
     ex = _mock_exchange()
     ex.fetch_positions.return_value = [
