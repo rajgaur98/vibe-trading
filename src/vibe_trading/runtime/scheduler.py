@@ -75,19 +75,31 @@ class TradingScheduler:
         return scheduler
 
     def _tick(self):
-        """One live execution window: evaluate, then run the online-eval scoring pass.
+        """One live execution window: evaluate, run the online-eval scoring pass, and
+        ping the dead-man's-switch.
 
-        Mirrors cli.execute_trade_once so the deployed `live` loop scores matured
-        decisions every tick — not only the `trade-once` path. Without this the online
-        feedback loop (decision_scores, drift digest, RAG precedent quality) is inert in
-        production. Scoring is best-effort: a scoring failure must never fail the trade
-        tick, which has already completed and persisted its side effects."""
-        self.sync_and_evaluate()
+        Mirrors cli.execute_trade_once so the deployed `live` loop matches the trade-once
+        path: it scores matured decisions every tick (otherwise the online feedback loop —
+        decision_scores, drift digest, RAG precedent quality — is inert in production), and
+        it pings the dead-man's-switch so a *missed* tick (a stalled or crashed scheduler)
+        trips the external monitor. Before this, `live` had no silent-outage detection — a
+        multi-day stall went unnoticed while a position bled out.
+
+        Scoring is best-effort. A tick-body failure pings the /fail endpoint and is
+        swallowed so the long-running scheduler keeps ticking and retrying rather than
+        dying silently; the external monitor still alerts on the failure and on any missed
+        success ping."""
         try:
-            from vibe_trading.eval.online import run_scoring_pass
-            run_scoring_pass()
+            self.sync_and_evaluate()
+            try:
+                from vibe_trading.eval.online import run_scoring_pass
+                run_scoring_pass()
+            except Exception as e:
+                logger.warning(f"online scoring pass failed (non-fatal): {e}")
+            monitoring.ping_healthcheck(success=True)
         except Exception as e:
-            logger.warning(f"online scoring pass failed (non-fatal): {e}")
+            logger.exception(f"live tick failed: {e}")
+            monitoring.ping_healthcheck(success=False)
 
     def start(self):
         """Starts the main scheduling loop."""

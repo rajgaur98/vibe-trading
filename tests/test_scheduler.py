@@ -311,6 +311,43 @@ def test_tick_scoring_failure_does_not_break_the_loop(monkeypatch):
     assert calls == ["evaluate"]
 
 
+def test_tick_pings_dead_mans_switch_on_success(monkeypatch):
+    """A healthy live tick must ping the dead-man's-switch so a *missed* tick (stalled
+    or crashed scheduler) trips the external monitor. This ping was previously only in
+    the trade-once path, so the `live` deployment had no silent-outage detection."""
+    import vibe_trading.runtime.monitoring as monitoring
+    import vibe_trading.eval.online as online_mod
+    from vibe_trading.runtime.scheduler import TradingScheduler
+
+    pings = []
+    sched = TradingScheduler.__new__(TradingScheduler)
+    sched.sync_and_evaluate = lambda: None
+    monkeypatch.setattr(online_mod, "run_scoring_pass", lambda *a, **k: {})
+    monkeypatch.setattr(monitoring, "ping_healthcheck", lambda success=True: pings.append(success))
+
+    sched._tick()
+
+    assert pings == [True]
+
+
+def test_tick_failure_pings_dead_mans_switch_fail_and_does_not_propagate(monkeypatch):
+    """If the tick body raises, _tick pings the /fail endpoint and swallows the error so
+    the long-running scheduler keeps ticking (and retrying) rather than dying silently."""
+    import vibe_trading.runtime.monitoring as monitoring
+    from vibe_trading.runtime.scheduler import TradingScheduler
+
+    pings = []
+    sched = TradingScheduler.__new__(TradingScheduler)
+    def _boom():
+        raise RuntimeError("tick exploded")
+    sched.sync_and_evaluate = _boom
+    monkeypatch.setattr(monitoring, "ping_healthcheck", lambda success=True: pings.append(success))
+
+    sched._tick()  # must not raise
+
+    assert pings == [False]
+
+
 # --- decision_log prompt_version stamping ---
 
 def test_decision_log_insert_carries_bundle_prompt_version(monkeypatch):
