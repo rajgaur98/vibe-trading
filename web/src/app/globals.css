@@ -27,6 +27,9 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-gain: var(--gain);
+  --color-loss: var(--loss);
+  --color-flat: var(--flat);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -64,6 +67,9 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
+  --gain: oklch(0.596 0.145 162.5);
+  --loss: oklch(0.577 0.245 27.325);
+  --flat: oklch(0.556 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -99,6 +105,9 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --gain: oklch(0.723 0.152 162.5);
+  --loss: oklch(0.704 0.191 22.216);
+  --flat: oklch(0.708 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
@@ -126,5 +135,15 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Tailwind v4 Preflight defaults <button> to cursor:default; restore the
+     pointer on interactive elements (shadcn/base-nova doesn't set it). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="menuitem"],
+  [role="menuitemradio"],
+  [role="menuitemcheckbox"] {
+    cursor: pointer;
   }
 }

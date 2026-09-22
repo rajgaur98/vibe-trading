@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { LayoutDashboard, Brain, History, RefreshCw, Activity } from "lucide-react";
+import { LayoutDashboard, Brain, History } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export default function Navigation() {
   const pathname = usePathname();
@@ -43,20 +44,26 @@ export default function Navigation() {
     PAPER: "PAPER MODE",
   };
   const modeLabel = status?.mode ? MODE_LABELS[status.mode] ?? `${status.mode} MODE` : "Offline";
+  const isOnline = status?.status === "online";
+  const statusText = loading
+    ? "Checking status…"
+    : isOnline
+      ? "All systems operational"
+      : "Systems offline";
 
   return (
-    <aside className="w-64 border-r border-emerald-950/20 bg-slate-950/40 backdrop-blur-md flex flex-col justify-between p-6">
+    <aside className="flex w-64 shrink-0 flex-col justify-between border-r border-border bg-card px-4 py-6">
       <div className="space-y-8">
-        {/* Brand/Logo */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+        {/* Brand / Logo */}
+        <div className="flex items-center gap-3 px-2">
+          <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-base font-bold text-primary-foreground">
             V
           </div>
-          <div>
-            <h1 className="text-lg font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
-              VIBE TRADING
+          <div className="leading-tight">
+            <h1 className="text-sm font-semibold tracking-tight text-foreground">
+              Vibe Trading
             </h1>
-            <p className="text-[10px] text-slate-500 font-medium tracking-widest uppercase">
+            <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
               Agentic Quant Bot
             </p>
           </div>
@@ -71,13 +78,15 @@ export default function Navigation() {
               <Link
                 key={link.href}
                 href={link.href}
-                className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all duration-200 ${
+                aria-current={isActive ? "page" : undefined}
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-gradient-to-r from-emerald-950/40 to-slate-900 border-l-2 border-emerald-500 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.05)]"
-                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-900/50"
-                }`}
+                    ? "bg-secondary text-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
               >
-                <Icon className={`w-4 h-4 ${isActive ? "text-emerald-400" : "text-slate-400"}`} />
+                <Icon className="size-4 shrink-0" />
                 {link.label}
               </Link>
             );
@@ -86,20 +95,24 @@ export default function Navigation() {
       </div>
 
       {/* System Status Footer */}
-      <div className="border-t border-slate-900 pt-6">
-        <div className="flex items-center justify-between rounded-lg bg-slate-900/40 border border-slate-900/60 p-3">
-          <div className="flex items-center gap-2">
-            <Activity className={`w-4 h-4 ${status?.status === "online" ? "text-emerald-500 animate-pulse" : "text-slate-500"}`} />
-            <div>
-              <p className="text-xs font-semibold text-slate-300">System Status</p>
-              <p className="text-[10px] text-slate-500 uppercase tracking-wider font-semibold">
-                {loading ? "Checking..." : modeLabel}
-              </p>
-            </div>
-          </div>
-          {!loading && status?.status === "online" && (
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />
+      <div
+        className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5"
+        title={loading ? undefined : `Trading mode: ${modeLabel}`}
+      >
+        <span className="relative flex size-2.5">
+          {isOnline && (
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-gain opacity-60" />
           )}
+          <span
+            className={cn(
+              "relative inline-flex size-2.5 rounded-full",
+              isOnline ? "bg-gain" : "bg-muted-foreground"
+            )}
+          />
+        </span>
+        <div className="leading-tight">
+          <p className="text-xs font-semibold text-foreground">System Status</p>
+          <p className="text-[11px] font-medium text-muted-foreground">{statusText}</p>
         </div>
       </div>
     </aside>
