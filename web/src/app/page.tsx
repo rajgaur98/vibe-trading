@@ -4,12 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import MetricsGrid from "@/components/MetricsGrid";
 import PositionsList from "@/components/PositionsList";
-import EquityChart from "@/components/EquityChart";
-import { Badge } from "@/components/ui/badge";
+import PortfolioChart from "@/components/PortfolioChart";
+import PageHeader from "@/components/PageHeader";
+import ActionBadge from "@/components/ActionBadge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { RefreshCw, PlayCircle, ChevronRight, BrainCircuit } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PlayCircle, ChevronRight, FileText, Info, X, BarChart3 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 
 interface Decision {
   decision_id: string;
@@ -34,6 +36,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [notification, setNotification] = useState<{ type: "success" | "error" | "info" | null; message: string }>({ type: null, message: "" });
 
   // The /api/trigger-tick endpoint is localhost-only (see web/security.py on the API),
@@ -69,7 +72,6 @@ export default function Dashboard() {
     }
   }
 
-
   async function fetchDashboardData() {
     setRefreshing(true);
     try {
@@ -84,6 +86,7 @@ export default function Dashboard() {
       if (posRes.ok) setPositions(await posRes.json());
       if (decRes.ok) setDecisions(await decRes.json());
       if (costsRes.ok) setCosts(await costsRes.json());
+      setLastUpdated(new Date());
     } catch (err) {
       console.error("Error fetching dashboard data:", err);
     } finally {
@@ -174,94 +177,93 @@ export default function Dashboard() {
   }));
 
   return (
-    <div className="p-8 space-y-8 flex-1">
-      {/* Top Banner / Headers */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-extrabold text-slate-100 tracking-tight">
-            Vibe Trading Terminal
-          </h2>
-          <p className="text-sm font-medium text-slate-400 mt-1">
-            Real-time multi-agent crypto swing-trading and risk ledger.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {isLocalhost && (
-            <Button
-              onClick={triggerOnDemandTrade}
-              disabled={triggering || refreshing}
-              className="bg-emerald-600 hover:bg-emerald-500 text-slate-100 font-bold gap-2 cursor-pointer transition-colors"
-            >
-              <PlayCircle className={`w-3.5 h-3.5 ${triggering ? "animate-spin" : ""}`} />
-              {triggering ? "Scanning Market..." : "Scan & Trade"}
-            </Button>
-          )}
-
+    <div className="space-y-8 p-6 sm:p-8">
+      <PageHeader
+        eyebrow="Trading Terminal"
+        title="Vibe Trading Terminal"
+        subtitle="Real-time multi-agent crypto swing-trading and risk ledger."
+        lastUpdated={lastUpdated}
+        onRefresh={fetchDashboardData}
+        refreshing={refreshing}
+      >
+        {isLocalhost && (
           <Button
-            onClick={fetchDashboardData}
-            disabled={refreshing || triggering}
-            variant="outline"
-            className="bg-slate-900/60 border-slate-900 text-slate-300 font-bold hover:bg-slate-900/80 gap-2"
+            onClick={triggerOnDemandTrade}
+            disabled={triggering || refreshing}
+            size="sm"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh
+            <PlayCircle className={triggering ? "animate-spin" : ""} />
+            {triggering ? "Scanning…" : "Scan & Trade"}
           </Button>
-        </div>
-      </div>
+        )}
+      </PageHeader>
 
       {notification.type && (
-        <div className={`p-4 rounded-xl border font-semibold text-sm transition-all duration-300 flex items-center justify-between shadow-lg ${
-          notification.type === "success" 
-            ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" 
-            : notification.type === "error" 
-            ? "bg-rose-500/10 border-rose-500/20 text-rose-400" 
-            : "bg-cyan-500/15 border-cyan-500/30 text-cyan-400 animate-pulse"
-        }`}>
+        <div
+          className={cn(
+            "flex items-center justify-between gap-4 rounded-xl border px-4 py-3 text-sm font-medium",
+            notification.type === "success" && "border-gain/30 bg-gain/10 text-gain",
+            notification.type === "error" && "border-loss/30 bg-loss/10 text-loss",
+            notification.type === "info" && "border-border bg-muted text-foreground"
+          )}
+        >
           <span>{notification.message}</span>
-          <button 
-            onClick={() => setNotification({ type: null, message: "" })} 
-            className="text-slate-400 hover:text-slate-200 ml-4 font-bold text-base cursor-pointer"
+          <button
+            onClick={() => setNotification({ type: null, message: "" })}
+            className="text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="Dismiss"
           >
-            ✕
+            <X className="size-4" />
           </button>
         </div>
       )}
 
-      {/* Metrics Row */}
       <MetricsGrid metrics={metrics} costs={costs} />
 
-      {/* Charts & Positions Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Portfolio Equity Chart */}
-        <EquityChart metrics={metrics} />
-
-        {/* Active Open Positions Panel */}
-        <PositionsList positions={positionsWithLivePrice} loading={loading} wsConnected={wsConnected} />
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+        <div className="lg:col-span-3">
+          <PortfolioChart
+            data={metrics?.equity_curve}
+            title="Portfolio Performance"
+            subtitle="Total portfolio value over time"
+            icon={BarChart3}
+          />
+        </div>
+        <div className="lg:col-span-1">
+          <PositionsList positions={positionsWithLivePrice} loading={loading} wsConnected={wsConnected} />
+        </div>
       </div>
 
-      {/* Recent Decisions Feed */}
-      <Card className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl">
-        <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-slate-900/60">
-          <div className="flex items-center gap-2.5">
-            <BrainCircuit className="w-5 h-5 text-emerald-500" />
-            <CardTitle className="text-base font-bold text-slate-200">
-              Recent Agent Decisions
-            </CardTitle>
+      {/* Recent Agent Activity */}
+      <Card>
+        <CardHeader className="flex flex-row items-start justify-between border-b [.border-b]:pb-4">
+          <div className="flex items-start gap-2.5">
+            <span className="mt-0.5 flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground">
+              <FileText className="size-4" />
+            </span>
+            <div className="space-y-0.5">
+              <CardTitle className="text-base font-semibold">Recent Agent Activity</CardTitle>
+              <CardDescription>Latest agent decisions and system activity</CardDescription>
+            </div>
           </div>
           <Link
             href="/decisions"
-            className="text-xs font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1 transition-all"
+            className="flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
           >
-            Explore all transcripts
-            <ChevronRight className="w-3.5 h-3.5" />
+            View All
+            <ChevronRight className="size-3.5" />
           </Link>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="pt-4">
+          <div className="mb-4 flex items-start gap-2 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
+            <Info className="mt-0.5 size-3.5 shrink-0" />
+            <span>Agent decision logs, trade history, and detailed reasoning can be found in their respective sections.</span>
+          </div>
+
           {loading ? (
-            <div className="divide-y divide-slate-900/60">
+            <div className="divide-y divide-border">
               {[...Array(3)].map((_, i) => (
-                <div key={i} className="p-6 space-y-3">
+                <div key={i} className="space-y-3 py-4 first:pt-0">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Skeleton className="h-4 w-16" />
@@ -269,44 +271,27 @@ export default function Dashboard() {
                     </div>
                     <Skeleton className="h-3 w-32" />
                   </div>
-                  <div className="space-y-1.5">
-                    <Skeleton className="h-3.5 w-full" />
-                    <Skeleton className="h-3.5 w-5/6" />
-                  </div>
+                  <Skeleton className="h-3.5 w-full" />
+                  <Skeleton className="h-3.5 w-5/6" />
                 </div>
               ))}
             </div>
           ) : decisions.length === 0 ? (
-            <div className="py-12 text-center text-slate-500 text-sm font-medium">
+            <div className="py-8 text-center text-sm text-muted-foreground">
               No decisions logged yet. Run a trade execution tick to generate logs.
             </div>
           ) : (
-            <div className="divide-y divide-slate-900">
+            <div className="divide-y divide-border">
               {decisions.map((dec) => {
-                const isFlat = dec.action.toLowerCase() === "flat";
-                const isClose = dec.action.toLowerCase() === "close";
-                const isLong = dec.action.toLowerCase() === "long";
+                const isTradable = !["flat", "close"].includes(dec.action.toLowerCase());
                 return (
-                  <div key={dec.decision_id} className="p-6 hover:bg-slate-900/20 transition-all">
-                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 mb-3">
-                      <div className="flex items-center gap-3">
-                        <span className="font-bold text-sm text-slate-300">{dec.symbol}</span>
-                        <Badge
-                          className={`font-extrabold px-2 py-0.5 uppercase text-[10px] ${
-                            isFlat
-                              ? "bg-slate-950/40 text-slate-400 border border-slate-900"
-                              : isClose
-                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                              : isLong
-                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                              : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                          }`}
-                        >
-                          {dec.action}
-                        </Badge>
+                  <div key={dec.decision_id} className="space-y-2.5 py-4 first:pt-0">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <span className="text-sm font-semibold text-foreground">{dec.symbol}</span>
+                        <ActionBadge action={dec.action} />
                       </div>
-
-                      <span suppressHydrationWarning className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
+                      <span suppressHydrationWarning className="text-xs text-muted-foreground">
                         {dec.timestamp
                           ? new Date(dec.timestamp).toLocaleString(undefined, {
                               dateStyle: "medium",
@@ -315,28 +300,24 @@ export default function Dashboard() {
                           : "Unknown"}
                       </span>
                     </div>
-
-                    <p className="text-slate-400 text-xs leading-relaxed font-medium">
-                      {dec.reasoning_summary}
-                    </p>
-
-                    {!isFlat && !isClose && (
-                      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-[10px] font-semibold text-slate-500">
+                    <p className="text-sm leading-relaxed text-muted-foreground">{dec.reasoning_summary}</p>
+                    {isTradable && (
+                      <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-xs text-muted-foreground">
                         <span>
-                          Stop Strategy:{" "}
-                          <strong className="text-slate-400 uppercase">
+                          Stop:{" "}
+                          <span className="font-medium text-foreground uppercase">
                             {dec.stop_loss_strategy.replace("_", " ")}
-                          </strong>
+                          </span>
                         </span>
                         <span>
-                          Target Profit:{" "}
-                          <strong className="text-slate-400 uppercase">
+                          Target:{" "}
+                          <span className="font-medium text-foreground uppercase">
                             {dec.take_profit_strategy.replace("_", " ")}
-                          </strong>
+                          </span>
                         </span>
                         <span>
-                          Risk/Reward Ratio:{" "}
-                          <strong className="text-slate-400">{dec.risk_reward_ratio}x</strong>
+                          R/R:{" "}
+                          <span className="font-medium text-foreground">{dec.risk_reward_ratio}x</span>
                         </span>
                       </div>
                     )}

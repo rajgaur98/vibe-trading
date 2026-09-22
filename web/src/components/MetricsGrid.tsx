@@ -1,6 +1,19 @@
+import type { LucideIcon } from "lucide-react";
+import {
+  Wallet,
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  ArrowUpRight,
+  ArrowDownRight,
+  Target,
+  Percent,
+  ShieldAlert,
+  BarChart3,
+  Cpu,
+  FileText,
+} from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { TrendingUp, TrendingDown, DollarSign, Percent, Award, ShieldAlert, Cpu } from "lucide-react";
-
 import { Skeleton } from "@/components/ui/skeleton";
 
 interface MetricsData {
@@ -22,6 +35,14 @@ interface CostData {
   projected_monthly_usd: number;
 }
 
+interface Metric {
+  title: string;
+  value: React.ReactNode;
+  desc: React.ReactNode;
+  icon: LucideIcon;
+  glyph: LucideIcon;
+}
+
 export default function MetricsGrid({
   metrics,
   costs,
@@ -29,75 +50,75 @@ export default function MetricsGrid({
   metrics: MetricsData | null;
   costs?: CostData | null;
 }) {
-  const data = [
+  const pnlUp = metrics ? metrics.total_pnl >= 0 : true;
+
+  const data: Metric[] = [
     {
       title: "Portfolio Balance",
       value: metrics ? `$${metrics.balance.toLocaleString()}` : <Skeleton className="h-8 w-28" />,
-      icon: DollarSign,
-      desc: metrics ? `Peak: $${metrics.peak_balance.toLocaleString()}` : <Skeleton className="h-3 w-20 mt-1" />,
-      iconColor: "text-emerald-400",
-      iconBg: "bg-emerald-500/10",
+      desc: metrics ? `Peak: $${metrics.peak_balance.toLocaleString()}` : <Skeleton className="mt-1 h-3 w-20" />,
+      icon: Wallet,
+      glyph: DollarSign,
     },
     {
       title: "Total Net Profit",
-      value: metrics ? `${metrics.total_pnl >= 0 ? "+" : ""}$${metrics.total_pnl.toLocaleString()}` : <Skeleton className="h-8 w-28" />,
-      icon: metrics && metrics.total_pnl >= 0 ? TrendingUp : TrendingDown,
-      desc: metrics ? `Total Trades: ${metrics.total_trades}` : <Skeleton className="h-3 w-20 mt-1" />,
-      iconColor: metrics && metrics.total_pnl >= 0 ? "text-emerald-400" : "text-rose-400",
-      iconBg: metrics && metrics.total_pnl >= 0 ? "bg-emerald-500/10" : "bg-rose-500/10",
-      textColor: metrics ? (metrics.total_pnl >= 0 ? "text-emerald-400" : "text-rose-400") : "",
+      value: metrics
+        ? `${metrics.total_pnl >= 0 ? "+" : ""}$${metrics.total_pnl.toLocaleString()}`
+        : <Skeleton className="h-8 w-28" />,
+      desc: metrics ? `Total Trades: ${metrics.total_trades}` : <Skeleton className="mt-1 h-3 w-20" />,
+      icon: pnlUp ? TrendingUp : TrendingDown,
+      glyph: pnlUp ? ArrowUpRight : ArrowDownRight,
     },
     {
       title: "Win Rate",
       value: metrics ? `${metrics.win_rate}%` : <Skeleton className="h-8 w-16" />,
-      icon: Percent,
-      desc: metrics ? `Profit Factor: ${metrics.profit_factor}` : <Skeleton className="h-3 w-20 mt-1" />,
-      iconColor: "text-cyan-400",
-      iconBg: "bg-cyan-500/10",
+      desc: metrics ? `Profit Factor: ${metrics.profit_factor}` : <Skeleton className="mt-1 h-3 w-24" />,
+      icon: Target,
+      glyph: Percent,
     },
     {
       title: "Max Drawdown",
       value: metrics ? `${metrics.drawdown.toFixed(2)}%` : <Skeleton className="h-8 w-16" />,
-      icon: ShieldAlert,
       desc: "Relative to peak equity",
-      iconColor: "text-amber-400",
-      iconBg: "bg-amber-500/10",
+      icon: ShieldAlert,
+      glyph: BarChart3,
     },
     {
       title: "LLM Spend (today)",
       value: costs ? `$${(costs.today_usd ?? 0).toFixed(4)}` : <Skeleton className="h-8 w-20" />,
-      icon: Cpu,
       desc: costs
         ? `~$${(costs.projected_monthly_usd ?? 0).toFixed(2)}/mo · ${costs.calls ?? 0} calls`
-        : <Skeleton className="h-3 w-20 mt-1" />,
-      iconColor: "text-violet-400",
-      iconBg: "bg-violet-500/10",
+        : <Skeleton className="mt-1 h-3 w-24" />,
+      icon: Cpu,
+      glyph: FileText,
     },
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
       {data.map((item, idx) => {
         const Icon = item.icon;
+        const Glyph = item.glyph;
         return (
-          <Card key={idx} className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-sm font-semibold text-slate-400">{item.title}</span>
-                <div className={`p-2.5 rounded-lg ${item.iconBg}`}>
-                  <Icon className={`w-4 h-4 ${item.iconColor}`} />
-                </div>
+          <Card key={idx} className="gap-0 py-0">
+            <CardContent className="p-5">
+              <div className="mb-4 flex items-start justify-between">
+                <span className="flex size-9 items-center justify-center rounded-lg border border-border text-muted-foreground">
+                  <Icon className="size-4" />
+                </span>
+                <span className="flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground">
+                  <Glyph className="size-3.5" />
+                </span>
               </div>
-              <div>
-                {/* div (not h3/p): `value`/`desc` can be a <Skeleton> (a <div>) while loading,
-                    and a <div> nested in <p>/<h3> is invalid HTML -> React hydration error. */}
-                <div className={`text-2xl font-bold tracking-tight text-slate-100 ${item.textColor || ""}`}>
-                  {item.value}
-                </div>
-                {item.desc && (
-                  <div className="text-xs text-slate-500 mt-1 font-medium">{item.desc}</div>
-                )}
+              {/* div (not p/h3): value/desc can be a <Skeleton> (a div) while loading,
+                  and a div nested in p/h3 is invalid HTML → hydration error. */}
+              <div className="text-sm font-medium text-muted-foreground">{item.title}</div>
+              <div className="mt-1 text-2xl font-semibold tracking-tight text-foreground">
+                {item.value}
               </div>
+              {item.desc && (
+                <div className="mt-1 text-xs text-muted-foreground">{item.desc}</div>
+              )}
             </CardContent>
           </Card>
         );

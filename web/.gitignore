@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# app source lib — the repo-root .gitignore has a Python-style `lib/` rule that
+# otherwise swallows web/src/lib/ (e.g. the shadcn `cn` helper), which silently
+# breaks fresh clones/worktree builds. Re-include the frontend's source lib.
+!src/lib/
+

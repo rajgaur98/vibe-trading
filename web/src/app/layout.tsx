@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import Navigation from "@/components/Navigation";
+import TopBar from "@/components/TopBar";
+import { Providers } from "@/components/providers";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -21,16 +23,21 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} dark h-full antialiased`}
+      suppressHydrationWarning
+      className={`${inter.variable} h-full antialiased`}
     >
-      <body className="h-full bg-slate-950 font-sans text-slate-200 antialiased flex flex-row overflow-hidden">
-        {/* Navigation Sidebar */}
-        <Navigation />
-
-        {/* Main Content Area */}
-        <main className="flex-1 flex flex-col h-full overflow-y-auto bg-gradient-to-tr from-slate-950 via-slate-950 to-slate-900/40">
-          {children}
-        </main>
+      <body className="h-full bg-background font-sans text-foreground antialiased">
+        <Providers>
+          <div className="flex h-full flex-row overflow-hidden">
+            <Navigation />
+            <main className="flex h-full flex-1 flex-col overflow-hidden">
+              <TopBar />
+              <div className="flex-1 overflow-y-auto bg-muted/40">
+                {children}
+              </div>
+            </main>
+          </div>
+        </Providers>
       </body>
     </html>
   );

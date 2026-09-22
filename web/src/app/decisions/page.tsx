@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { Brain, RefreshCw, Calendar, ArrowRight, BarChart4, Cpu } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import PageHeader from "@/components/PageHeader";
+import ActionBadge from "@/components/ActionBadge";
+import { Calendar, FileText, BarChart3, Activity, LineChart, Layers } from "lucide-react";
 
 interface Decision {
   decision_id: string;
@@ -20,10 +21,20 @@ interface Decision {
   agent_transcripts: any;
 }
 
+function SnapshotRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium text-foreground">{value}</span>
+    </div>
+  );
+}
+
 export default function Decisions() {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   async function fetchDecisions() {
     setRefreshing(true);
@@ -31,6 +42,7 @@ export default function Decisions() {
       const res = await fetch("/api/decisions?limit=30");
       if (res.ok) {
         setDecisions(await res.json());
+        setLastUpdated(new Date());
       }
     } catch (err) {
       console.error("Error fetching decisions:", err);
@@ -45,237 +57,154 @@ export default function Decisions() {
   }, []);
 
   return (
-    <div className="p-8 space-y-8 flex-1">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-extrabold text-slate-100 tracking-tight flex items-center gap-3">
-            <Brain className="w-8 h-8 text-emerald-500" />
-            Agent Decision Logs
-          </h2>
-          <p className="text-sm font-medium text-slate-400 mt-1">
-            Historical trace of Gemini multi-agent reasoning, indicators snapshot, and risk approvals.
-          </p>
-        </div>
+    <div className="space-y-8 p-6 sm:p-8">
+      <PageHeader
+        eyebrow="Reasoning Trace"
+        title="Agent Decision Logs"
+        subtitle="Historical trace of Gemini multi-agent reasoning, indicators snapshot, and risk approvals."
+        lastUpdated={lastUpdated}
+        onRefresh={fetchDecisions}
+        refreshing={refreshing}
+        refreshLabel="Refresh"
+      />
 
-        <Button
-          onClick={fetchDecisions}
-          disabled={refreshing}
-          variant="outline"
-          className="bg-slate-900/60 border-slate-900 text-slate-300 font-bold hover:bg-slate-900/80 gap-2"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh Log
-        </Button>
-      </div>
-
-      {/* Decisions Timeline */}
       {loading ? (
-        <div className="space-y-6">
-          {[...Array(3)].map((_, i) => (
-            <Card
-              key={i}
-              className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl overflow-hidden"
-            >
-              <div className="p-6 border-b border-slate-900 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="space-y-4">
+          {[...Array(4)].map((_, i) => (
+            <Card key={i} className="gap-0 px-5 py-4">
+              <div className="flex items-center justify-between">
                 <div className="space-y-2">
-                  <div className="flex items-center gap-3">
-                    <Skeleton className="h-5 w-24 animate-pulse" />
-                    <Skeleton className="h-5 w-14 animate-pulse" />
+                  <div className="flex items-center gap-2.5">
+                    <Skeleton className="h-5 w-28" />
+                    <Skeleton className="h-5 w-14" />
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Skeleton className="h-3.5 w-32 animate-pulse" />
-                  </div>
+                  <Skeleton className="h-3.5 w-40" />
                 </div>
-                <div className="flex gap-4">
-                  <Skeleton className="h-10 w-24 rounded-lg animate-pulse" />
-                  <Skeleton className="h-10 w-24 rounded-lg animate-pulse" />
-                  <Skeleton className="h-10 w-16 rounded-lg animate-pulse" />
-                </div>
+                <Skeleton className="h-6 w-32 rounded-full" />
               </div>
-              <CardContent className="p-6 space-y-4">
-                <div className="space-y-2">
-                  <Skeleton className="h-3 w-32 animate-pulse" />
-                  <Skeleton className="h-3.5 w-full animate-pulse" />
-                  <Skeleton className="h-3.5 w-5/6 animate-pulse" />
-                </div>
-              </CardContent>
+              <Separator className="my-4" />
+              <Skeleton className="h-3.5 w-full" />
+              <Skeleton className="mt-2 h-3.5 w-5/6" />
             </Card>
           ))}
         </div>
       ) : decisions.length === 0 ? (
-        <Card className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl p-8 text-center text-slate-500 text-sm">
-          No decisions recorded. Run the bot scheduler or trigger on-demand `trade-once` runs to log decisions.
+        <Card className="p-10 text-center text-sm text-muted-foreground">
+          No decisions recorded. Run the bot scheduler or trigger on-demand runs to log decisions.
         </Card>
       ) : (
-        <div className="space-y-6">
-          {decisions.map((dec) => {
-            const isFlat = dec.action.toLowerCase() === "flat";
-            const isClose = dec.action.toLowerCase() === "close";
-            const isLong = dec.action.toLowerCase() === "long";
+        <div className="space-y-4">
+          {decisions.map((dec, idx) => {
+            const isTradable = !["flat", "close"].includes(dec.action.toLowerCase());
             const snapshot = dec.agent_transcripts || {};
+            const hasSnapshot = Object.keys(snapshot).length > 0;
 
             return (
-              <Card
-                key={dec.decision_id}
-                className="bg-slate-900/40 border-slate-900/60 backdrop-blur-sm shadow-xl overflow-hidden"
-              >
-                {/* Panel Header */}
-                <div className="p-6 border-b border-slate-900 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-3">
-                      <span className="font-extrabold text-slate-200 text-base">{dec.symbol}</span>
-                      <Badge
-                        className={`font-extrabold px-2.5 py-0.5 uppercase text-[10px] ${
-                          isFlat
-                            ? "bg-slate-950/40 text-slate-400 border border-slate-900"
-                            : isClose
-                            ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                            : isLong
-                            ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                            : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                        }`}
-                      >
-                        {dec.action}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-                      <Calendar className="w-3.5 h-3.5 text-slate-500" />
-                      <span suppressHydrationWarning>{new Date(dec.timestamp).toLocaleString()}</span>
-                    </div>
-                  </div>
-
-                  {!isFlat && !isClose && (
-                    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs font-semibold text-slate-400 bg-slate-950/20 border border-slate-900 rounded-lg p-3">
-                      <div>
-                        <span className="text-slate-500 font-bold block mb-0.5">Stop Strategy</span>
-                        <span className="uppercase font-extrabold text-slate-300">
-                          {dec.stop_loss_strategy.replace("_", " ")}
+              <Card key={dec.decision_id} className="gap-0 overflow-hidden py-0">
+                <Accordion defaultValue={idx === 0 ? ["content"] : []}>
+                  <AccordionItem value="content" className="border-b-0">
+                    <AccordionTrigger className="items-center px-5 py-4 hover:no-underline">
+                      <div className="flex flex-1 items-center justify-between gap-4 pr-3">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-base font-semibold text-foreground">{dec.symbol}</span>
+                            <ActionBadge action={dec.action} />
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Calendar className="size-3.5" />
+                            <span suppressHydrationWarning>{new Date(dec.timestamp).toLocaleString()}</span>
+                          </div>
+                        </div>
+                        <span className="hidden items-center gap-1.5 rounded-full border border-border bg-muted/60 px-2.5 py-1 text-xs font-medium text-muted-foreground sm:flex">
+                          <span className="size-1.5 rounded-full bg-gain" />
+                          Decision Logged
                         </span>
                       </div>
-                      <div className="border-l border-slate-900/80 pl-4">
-                        <span className="text-slate-500 font-bold block mb-0.5">Target Profit</span>
-                        <span className="uppercase font-extrabold text-slate-300">
-                          {dec.take_profit_strategy.replace("_", " ")}
-                        </span>
+                    </AccordionTrigger>
+
+                    <AccordionContent className="px-5">
+                      <Separator className="mb-4" />
+
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          <FileText className="size-3.5" />
+                          Trader Decision Reasoning
+                        </div>
+                        <p className="text-sm leading-relaxed text-muted-foreground">{dec.reasoning_summary}</p>
                       </div>
-                      <div className="border-l border-slate-900/80 pl-4">
-                        <span className="text-slate-500 font-bold block mb-0.5">Risk/Reward</span>
-                        <span className="font-extrabold text-slate-300">{dec.risk_reward_ratio}x</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
 
-                {/* Panel Body */}
-                <CardContent className="p-6 space-y-6">
-                  {/* Executive Summary */}
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 flex items-center gap-2">
-                      <ArrowRight className="w-3.5 h-3.5 text-emerald-500" />
-                      Trader Decision Reasoning
-                    </h4>
-                    <p className="text-sm text-slate-300 leading-relaxed font-medium pl-5 border-l-2 border-slate-900">
-                      {dec.reasoning_summary}
-                    </p>
-                  </div>
-
-                  {/* Accordion for Snapshots and Logs */}
-                  {Object.keys(snapshot).length > 0 && (
-                    <Accordion className="w-full border-t border-slate-900 pt-4">
-                      <AccordionItem value="snapshot" className="border-b-0">
-                        <AccordionTrigger className="text-xs font-bold text-slate-400 uppercase tracking-wider hover:text-slate-300 hover:no-underline py-2">
-                          <span className="flex items-center gap-2">
-                            <BarChart4 className="w-4 h-4 text-emerald-500" />
-                            Market Snapshot Data
-                          </span>
-                        </AccordionTrigger>
-                        <AccordionContent className="pt-4 pb-2">
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-xs">
-                            {/* Trend Indicators */}
-                            <div className="bg-slate-950/20 border border-slate-900 rounded-lg p-4 space-y-3 font-semibold">
-                              <h5 className="font-bold text-slate-400 border-b border-slate-900 pb-1.5 flex items-center gap-1.5">
-                                <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-                                Momentum Indicators
-                              </h5>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">RSI (14)</span>
-                                <span className="text-slate-300">
-                                  {snapshot.rsi_14 ? `${snapshot.rsi_14.toFixed(2)} (${snapshot.rsi_regime})` : "N/A"}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">ADX (14)</span>
-                                <span className="text-slate-300">
-                                  {snapshot.adx_14 ? `${snapshot.adx_14.toFixed(2)} (${snapshot.adx_regime})` : "N/A"}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">OBV Trend</span>
-                                <span className="text-slate-300 capitalize">{snapshot.obv_trend || "N/A"}</span>
-                              </div>
-                            </div>
-
-                            {/* Technical Structure */}
-                            <div className="bg-slate-950/20 border border-slate-900 rounded-lg p-4 space-y-3 font-semibold">
-                              <h5 className="font-bold text-slate-400 border-b border-slate-900 pb-1.5 flex items-center gap-1.5">
-                                <BarChart4 className="w-3.5 h-3.5 text-cyan-400" />
-                                Support & Resistance
-                              </h5>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Support Price</span>
-                                <span className="text-slate-300">
-                                  {snapshot.support_price ? `$${snapshot.support_price.toLocaleString()}` : "N/A"}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Resistance Price</span>
-                                <span className="text-slate-300">
-                                  {snapshot.resistance_price ? `$${snapshot.resistance_price.toLocaleString()}` : "N/A"}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Pattern Detected</span>
-                                <span className="text-slate-300 capitalize">
-                                  {snapshot.candlestick_pattern ? snapshot.candlestick_pattern.replace(/_/g, " ") : "None"}
-                                </span>
-                              </div>
-                            </div>
-
-                            {/* Macro & Derivatives */}
-                            <div className="bg-slate-950/20 border border-slate-900 rounded-lg p-4 space-y-3 font-semibold col-span-1 md:col-span-2 lg:col-span-1">
-                              <h5 className="font-bold text-slate-400 border-b border-slate-900 pb-1.5 flex items-center gap-1.5">
-                                <ArrowRight className="w-3.5 h-3.5 text-amber-400" />
-                                Derivatives & Macro
-                              </h5>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Funding Rate</span>
-                                <span className="text-slate-300 uppercase">{snapshot.funding_rate || "Neutral"}</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Open Interest Trend</span>
-                                <span className="text-slate-300 capitalize">{snapshot.open_interest_trend || "Neutral"}</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span className="text-slate-500">Macro Event Today</span>
-                                <span className={`font-bold ${snapshot.is_macro_event_today ? "text-amber-400 animate-pulse" : "text-slate-400"}`}>
-                                  {snapshot.is_macro_event_today ? "YES" : "NO"}
-                                </span>
-                              </div>
-                            </div>
+                      {isTradable && (
+                        <div className="mt-4 flex flex-wrap gap-x-8 gap-y-2 rounded-lg border border-border bg-muted/40 p-3 text-xs">
+                          <div>
+                            <p className="text-muted-foreground">Stop Strategy</p>
+                            <p className="mt-0.5 font-semibold uppercase text-foreground">{dec.stop_loss_strategy.replace("_", " ")}</p>
                           </div>
-                          
-                          {/* Raw JSON Snapshot code block */}
-                          <div className="mt-4">
-                            <pre className="bg-slate-950/80 border border-slate-900 rounded-lg p-4 text-[10px] text-emerald-400 overflow-x-auto max-h-60 font-mono">
-                              {JSON.stringify(snapshot, null, 2)}
-                            </pre>
+                          <div>
+                            <p className="text-muted-foreground">Target Profit</p>
+                            <p className="mt-0.5 font-semibold uppercase text-foreground">{dec.take_profit_strategy.replace("_", " ")}</p>
                           </div>
-                        </AccordionContent>
-                      </AccordionItem>
-                    </Accordion>
-                  )}
-                </CardContent>
+                          <div>
+                            <p className="text-muted-foreground">Risk / Reward</p>
+                            <p className="mt-0.5 font-semibold text-foreground">{dec.risk_reward_ratio}x</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {hasSnapshot && (
+                        <div className="mt-4">
+                          <Accordion>
+                            <AccordionItem value="snapshot" className="border-b-0">
+                              <AccordionTrigger className="py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:no-underline">
+                                <span className="flex items-center gap-2">
+                                  <BarChart3 className="size-4" />
+                                  Market Snapshot Data
+                                </span>
+                              </AccordionTrigger>
+                              <AccordionContent className="pt-3">
+                                <div className="grid grid-cols-1 gap-3 text-xs md:grid-cols-3">
+                                  <div className="space-y-2.5 rounded-lg border border-border bg-muted/40 p-4">
+                                    <h5 className="flex items-center gap-1.5 border-b border-border pb-1.5 font-semibold text-foreground">
+                                      <Activity className="size-3.5 text-muted-foreground" />
+                                      Momentum
+                                    </h5>
+                                    <SnapshotRow label="RSI (14)" value={snapshot.rsi_14 ? `${snapshot.rsi_14.toFixed(2)} (${snapshot.rsi_regime})` : "N/A"} />
+                                    <SnapshotRow label="ADX (14)" value={snapshot.adx_14 ? `${snapshot.adx_14.toFixed(2)} (${snapshot.adx_regime})` : "N/A"} />
+                                    <SnapshotRow label="OBV Trend" value={<span className="capitalize">{snapshot.obv_trend || "N/A"}</span>} />
+                                  </div>
+                                  <div className="space-y-2.5 rounded-lg border border-border bg-muted/40 p-4">
+                                    <h5 className="flex items-center gap-1.5 border-b border-border pb-1.5 font-semibold text-foreground">
+                                      <LineChart className="size-3.5 text-muted-foreground" />
+                                      Support &amp; Resistance
+                                    </h5>
+                                    <SnapshotRow label="Support" value={snapshot.support_price ? `$${snapshot.support_price.toLocaleString()}` : "N/A"} />
+                                    <SnapshotRow label="Resistance" value={snapshot.resistance_price ? `$${snapshot.resistance_price.toLocaleString()}` : "N/A"} />
+                                    <SnapshotRow label="Pattern" value={<span className="capitalize">{snapshot.candlestick_pattern ? snapshot.candlestick_pattern.replace(/_/g, " ") : "None"}</span>} />
+                                  </div>
+                                  <div className="space-y-2.5 rounded-lg border border-border bg-muted/40 p-4">
+                                    <h5 className="flex items-center gap-1.5 border-b border-border pb-1.5 font-semibold text-foreground">
+                                      <Layers className="size-3.5 text-muted-foreground" />
+                                      Derivatives &amp; Macro
+                                    </h5>
+                                    <SnapshotRow label="Funding Rate" value={<span className="uppercase">{snapshot.funding_rate || "Neutral"}</span>} />
+                                    <SnapshotRow label="Open Interest" value={<span className="capitalize">{snapshot.open_interest_trend || "Neutral"}</span>} />
+                                    <SnapshotRow
+                                      label="Macro Event Today"
+                                      value={<span className={snapshot.is_macro_event_today ? "font-semibold text-loss" : ""}>{snapshot.is_macro_event_today ? "YES" : "NO"}</span>}
+                                    />
+                                  </div>
+                                </div>
+
+                                <pre className="mt-4 max-h-60 overflow-auto rounded-lg border border-border bg-muted/60 p-4 font-mono text-[11px] leading-relaxed text-foreground">
+                                  {JSON.stringify(snapshot, null, 2)}
+                                </pre>
+                              </AccordionContent>
+                            </AccordionItem>
+                          </Accordion>
+                        </div>
+                      )}
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
               </Card>
             );
           })}
