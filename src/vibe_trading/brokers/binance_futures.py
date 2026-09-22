@@ -46,7 +46,8 @@ def _to_plain_symbol(ccxt_symbol: str) -> str:
 class BinanceFuturesBroker(BaseBroker):
     def __init__(self, db=None, exchange=None):
         self.db = db  # PostgresDatabase — the reconciliation ledger (open_positions)
-        self.peak_balance = 0.0  # tracked in-memory; updated in get_balance()
+        self.peak_balance = 0.0  # in-memory high-water mark; seeded from the durable
+        self._peak_hydrated = False  # portfolio_state store on the first get_balance()
         self.dry_run = os.getenv("BINANCE_TESTNET_DRY_RUN", "false").lower() == "true"
         self.leverage = int(os.getenv("BINANCE_TESTNET_LEVERAGE", "1"))
 
@@ -309,6 +310,24 @@ class BinanceFuturesBroker(BaseBroker):
             })
         return out
 
+    def _persisted_peak_balance(self) -> float:
+        """The durable drawdown high-water mark from portfolio_state (0.0 if unavailable).
+
+        The 15% drawdown circuit breaker is only meaningful if the peak survives a
+        process restart. This is best-effort: a DB hiccup must never break balance reads,
+        so any failure falls back to 0.0 (the in-memory tracker then takes over)."""
+        if not self.db:
+            return 0.0
+        try:
+            self.db.connect()
+            row = self.db.conn.execute(
+                "SELECT MAX(peak_balance) FROM portfolio_state"
+            ).fetchone()
+            return float(row[0]) if row and row[0] is not None else 0.0
+        except Exception as e:
+            logger.warning(f"BinanceFuturesBroker: could not read persisted peak_balance: {e}")
+            return 0.0
+
     def get_balance(self) -> float:
         if self.dry_run:
             self.peak_balance = max(self.peak_balance, 10000.0)
@@ -318,6 +337,11 @@ class BinanceFuturesBroker(BaseBroker):
         except Exception as e:
             logger.error(f"BinanceFuturesBroker: get_balance failed: {e}")
             return 0.0
+        if not self._peak_hydrated:
+            # Seed the high-water mark from the durable store once per process so a
+            # redeploy/crash can't silently reset it to the current (drawn-down) balance.
+            self.peak_balance = max(self.peak_balance, self._persisted_peak_balance())
+            self._peak_hydrated = True
         self.peak_balance = max(self.peak_balance, bal)
         return bal
 
