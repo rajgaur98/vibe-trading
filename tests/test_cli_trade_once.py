@@ -6,13 +6,16 @@ from unittest.mock import MagicMock
 from vibe_trading import cli
 
 
-def _patch(monkeypatch, evaluate_raises=False):
+def _patch(monkeypatch, evaluate_raises=False, outcome=None):
+    from vibe_trading.runtime.scheduler import TickOutcome
+    outcome = outcome or TickOutcome()
     calls = []
 
     def _evaluate():
         calls.append("evaluate")
         if evaluate_raises:
             raise RuntimeError("boom")
+        return outcome
 
     scheduler = MagicMock()
     scheduler.sync_and_evaluate.side_effect = _evaluate
@@ -62,3 +65,29 @@ def test_trade_once_runs_online_scoring_best_effort(monkeypatch):
     assert boom_calls, "scoring pass was never attempted"
     assert "ping:True" in calls          # scoring failure did not block success ping
     assert calls[-1] == "push"
+
+
+def test_execute_trade_once_pings_fail_when_nothing_evaluated(monkeypatch):
+    """Same honest-health rule as the live _tick: a window that attempted symbols but
+    evaluated none must ping /fail, not success."""
+    from vibe_trading.runtime.scheduler import TickOutcome
+    calls = _patch(monkeypatch, outcome=TickOutcome(attempted=5, evaluated=0,
+                                                    failures={"BTC/USDT": "503"}))
+    cli.execute_trade_once([])
+    assert "ping:False" in calls and "ping:True" not in calls
+    assert calls[-1] == "push"
+
+
+def test_execute_trade_once_pings_fail_on_global_error(monkeypatch):
+    from vibe_trading.runtime.scheduler import TickOutcome
+    calls = _patch(monkeypatch, outcome=TickOutcome(global_error="db down"))
+    cli.execute_trade_once([])
+    assert "ping:False" in calls and "ping:True" not in calls
+
+
+def test_execute_trade_once_partial_failure_pings_success(monkeypatch):
+    from vibe_trading.runtime.scheduler import TickOutcome
+    calls = _patch(monkeypatch, outcome=TickOutcome(attempted=5, evaluated=4,
+                                                    failures={"BTC/USDT": "503"}))
+    cli.execute_trade_once([])
+    assert "ping:True" in calls

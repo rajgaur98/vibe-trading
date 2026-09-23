@@ -3,6 +3,7 @@ import time
 import logging
 from datetime import datetime, date
 import json
+from dataclasses import dataclass, field
 from apscheduler.schedulers.blocking import BlockingScheduler
 from langfuse import observe, propagate_attributes
 
@@ -24,6 +25,30 @@ from vibe_trading.runtime.decision_pipeline import DecisionPipeline
 from vibe_trading.runtime import monitoring
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TickOutcome:
+    """What one execution window actually did, so callers can report honest health.
+
+    attempted: symbols that reached evaluation (passed the exposure/open-position gates).
+    evaluated: symbols that produced a logged decision (including FLAT).
+    failures:  symbol -> reason for every attempted symbol that produced no decision.
+    global_error: set when a window-wide step (candle fetch, DB, broker) aborted the window.
+    """
+    attempted: int = 0
+    evaluated: int = 0
+    failures: dict = field(default_factory=dict)
+    global_error: str | None = None
+
+    @property
+    def healthy(self) -> bool:
+        """False on a global error, or when symbols were attempted but none evaluated.
+        A partial failure (some symbols ok) is still healthy — it is alerted, not paged."""
+        if self.global_error:
+            return False
+        return not (self.attempted > 0 and self.evaluated == 0)
+
 
 class TradingScheduler:
     def __init__(self, symbols: list = None):
@@ -85,18 +110,19 @@ class TradingScheduler:
         trips the external monitor. Before this, `live` had no silent-outage detection — a
         multi-day stall went unnoticed while a position bled out.
 
-        Scoring is best-effort. A tick-body failure pings the /fail endpoint and is
-        swallowed so the long-running scheduler keeps ticking and retrying rather than
-        dying silently; the external monitor still alerts on the failure and on any missed
-        success ping."""
+        Scoring is best-effort. The ping reflects the window's TickOutcome: a global error,
+        or attempting symbols but evaluating none (e.g. every LLM call 503'd), pings /fail —
+        sync_and_evaluate swallows those errors, so "didn't raise" is not "healthy". A
+        tick-body exception also pings /fail and is swallowed so the long-running scheduler
+        keeps ticking and retrying rather than dying silently."""
         try:
-            self.sync_and_evaluate()
+            outcome = self.sync_and_evaluate()
             try:
                 from vibe_trading.eval.online import run_scoring_pass
                 run_scoring_pass()
             except Exception as e:
                 logger.warning(f"online scoring pass failed (non-fatal): {e}")
-            monitoring.ping_healthcheck(success=True)
+            monitoring.ping_healthcheck(success=outcome.healthy)
         except Exception as e:
             logger.exception(f"live tick failed: {e}")
             monitoring.ping_healthcheck(success=False)
@@ -121,8 +147,14 @@ class TradingScheduler:
             logger.info("Scheduler stopped.")
 
     @observe()
-    def sync_and_evaluate(self):
-        """Syncs latest candles, updates broker status, and triggers agent evaluations."""
+    def sync_and_evaluate(self) -> TickOutcome:
+        """Syncs latest candles, updates broker status, and triggers agent evaluations.
+
+        Each symbol's evaluation is isolated: one symbol's failure (e.g. an LLM 503) is
+        logged, counted, and summarised in ONE Discord alert, and the loop moves on.
+        Window-wide failures still abort the window via the outer guard. Returns a
+        TickOutcome so callers can ping the dead-man's-switch honestly."""
+        outcome = TickOutcome()
         # 1. Resolve trading symbols dynamically
         is_dynamic = len(self.symbols) == 0
         if is_dynamic:
@@ -218,115 +250,150 @@ class TradingScheduler:
                     if any(pos['symbol'] == sym for pos in self.broker.get_open_positions()):
                         continue
                     
-                    # Fetch latest 4h candle timestamp
-                    self.db.connect()
+                    outcome.attempted += 1
                     try:
-                        last_candle_ts_res = self.db.conn.execute(
-                            "SELECT timestamp, close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
-                            (sym,)
-                        ).fetchone()
-                    finally:
-                        self.db.close()
-                    
-                    if not last_candle_ts_res:
+                        skip_reason = self._evaluate_symbol(sym)
+                    except Exception as e:
+                        logger.error(f"Evaluation failed for {sym} (continuing with next symbol): {e}",
+                                     exc_info=True)
+                        outcome.failures[sym] = f"{type(e).__name__}: {e}"
                         continue
-                    
-                    last_ts, current_price = last_candle_ts_res
-
-                    # Execution-critical price: futures mark in LIVE_TESTNET, else spot close.
-                    # TA still uses spot candles; only the entry/proximity price is aligned.
-                    exec_price = self._resolve_exec_price(sym, current_price)
-
-                    # Run the agent decision graph (analyst -> snapshot -> trader -> risk).
-                    # Pure orchestration; every side effect below is owned by the scheduler.
-                    result = self.decision_pipeline.run_symbol(sym, last_ts, exec_price)
-                    if result.status in ("analyst_failed", "no_snapshot"):
-                        continue
-
-                    proposal = result.proposal
-                    snapshot = result.snapshot
-                    trace_id = result.trace_id
-                    analyst_report = result.analyst_report
-
-                    # Log decision to database (every decision, including FLAT).
-                    self.pg_db.connect()
-                    try:
-                        self.pg_db.conn.execute("""
-                            INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id, prompt_version, precedents_k)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
-                              proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
-                              proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id,
-                              prompts.bundle_version(), result.precedents_k))
-                        # Persist the setup embedding (journal RAG) on the same connection, so
-                        # this decision becomes a future precedent once its outcome lands.
-                        journal.persist_embedding(
-                            self.pg_db.conn, proposal["decision_id"], proposal["symbol"],
-                            proposal["timestamp"], proposal["action"],
-                            float(snapshot.get("close", 0.0)),
-                            result.setup_text, result.setup_embedding,
-                        )
-                    finally:
-                        self.pg_db.close()
-
-                    # Append-only Parquet audit record for EVERY decision (including FLAT).
-                    # Unlike decision_log.agent_transcripts (which stores the feature
-                    # snapshot), this captures the REAL analyst + trader reasoning so the
-                    # full decision corpus is queryable later.
-                    audit.append_decision({
-                        "decision_id": proposal["decision_id"],
-                        "timestamp": proposal["timestamp"],
-                        "symbol": proposal["symbol"],
-                        "action": proposal["action"],
-                        "stop_loss_strategy": proposal["stop_loss_strategy"],
-                        "take_profit_strategy": proposal["take_profit_strategy"],
-                        "risk_reward_ratio": float(proposal["risk_reward_ratio"]),
-                        "reasoning_summary": proposal["reasoning_summary"],
-                        "trace_id": trace_id,
-                        "agent_transcripts": {
-                            "analyst": analyst_report.model_dump(),
-                            "trader": proposal,
-                        },
-                        "snapshot": snapshot,
-                    })
-
-                    if result.status == "flat":
-                        logger.info(f"Head Trader decided FLAT for {sym}. Reasoning: {proposal['reasoning_summary']}")
-                        continue
-
-                    # Risk Manager outcome (computed inside the decision pipeline).
-                    risk_res = result.risk_result
-                    if risk_res["approved"]:
-                        # Submit order to broker (internally connects and closes DuckDB inside PaperBroker)
-                        # Pass entry_price so the live paper-trading path fills the position
-                        # immediately at the RiskManager-computed mark, not on the next tick.
-                        self.broker.submit_order(
-                            symbol=sym,
-                            action=proposal["action"],
-                            size_usd=risk_res["size_usd"],
-                            stop_price=risk_res["stop_price"],
-                            take_profit_price=risk_res["take_profit_price"],
-                            entry_price=risk_res["entry_price"],
-                            decision_id=proposal["decision_id"],
-                        )
-                        
-                        self._send_discord_alert(
-                            f"🚀 **NEW TRADE ENTERED:** {sym} ({proposal['action'].upper()})\n"
-                            f"Entry Price: ${risk_res['entry_price']:.2f}\n"
-                            f"Stop Loss: ${risk_res['stop_price']:.2f} ({proposal['stop_loss_strategy']})\n"
-                            f"Take Profit: ${risk_res['take_profit_price']:.2f} ({proposal['take_profit_strategy']})\n"
-                            f"Position Size: **${risk_res['size_usd']:.2f}** (Risking 1.00% equity)\n"
-                            f"Reasoning: *{proposal['reasoning_summary']}*"
-                        )
+                    if skip_reason:
+                        outcome.failures[sym] = skip_reason
                     else:
-                        logger.warning(f"Risk Manager rejected proposal for {sym}: {risk_res['reason']}")
-                        self._send_discord_alert(
-                            f"⚠️ **RISK VETO:** Rejected {proposal['action'].upper()} on {sym}.\n"
-                            f"Reason: {risk_res['reason']}"
-                        )
+                        outcome.evaluated += 1
+
+                self._alert_symbol_failures(outcome)
             except Exception as e:
                 logger.error(f"Error in scheduler tick: {e}", exc_info=True)
+                outcome.global_error = f"{type(e).__name__}: {e}"
                 self._send_discord_alert(f"🔴 **SCHEDULER ERROR:** {str(e)}")
+        return outcome
+
+    def _alert_symbol_failures(self, outcome: TickOutcome):
+        """ONE Discord summary per tick for per-symbol failures (not one alert per symbol)."""
+        if not outcome.failures:
+            return
+        header = ("🔴 **NO SYMBOLS EVALUATED:**" if outcome.evaluated == 0
+                  else "⚠️ **SYMBOL EVALUATION FAILURES:**")
+        lines = [f"{header} {len(outcome.failures)}/{outcome.attempted} symbols failed "
+                 f"({outcome.evaluated} evaluated)."]
+        lines += [f"• {sym}: {reason[:150]}" for sym, reason in outcome.failures.items()]
+        self._send_discord_alert("\n".join(lines))
+
+    def _evaluate_symbol(self, sym: str) -> str | None:
+        """Run the decision graph for one symbol and apply its side effects (decision_log,
+        audit, order submission, alerts). Returns None when a decision was produced, or a
+        short reason when the symbol produced no decision. Raises on hard failures; the
+        caller isolates them per symbol."""
+        # Fetch latest 4h candle timestamp
+        self.db.connect()
+        try:
+            last_candle_ts_res = self.db.conn.execute(
+                "SELECT timestamp, close FROM candles WHERE symbol = ? AND timeframe = '4h' ORDER BY timestamp DESC LIMIT 1",
+                (sym,)
+            ).fetchone()
+        finally:
+            self.db.close()
+
+        if not last_candle_ts_res:
+            return "no 4h candles"
+
+        last_ts, current_price = last_candle_ts_res
+
+        # Execution-critical price: futures mark in LIVE_TESTNET, else spot close.
+        # TA still uses spot candles; only the entry/proximity price is aligned.
+        exec_price = self._resolve_exec_price(sym, current_price)
+
+        # Run the agent decision graph (analyst -> snapshot -> trader -> risk).
+        # Pure orchestration; every side effect below is owned by the scheduler.
+        result = self.decision_pipeline.run_symbol(sym, last_ts, exec_price)
+        if result.status in ("analyst_failed", "no_snapshot"):
+            return result.status
+
+        proposal = result.proposal
+        snapshot = result.snapshot
+        trace_id = result.trace_id
+        analyst_report = result.analyst_report
+
+        # Log decision to database (every decision, including FLAT).
+        self.pg_db.connect()
+        try:
+            self.pg_db.conn.execute("""
+                INSERT OR IGNORE INTO decision_log (decision_id, timestamp, symbol, action, stop_loss_strategy, take_profit_strategy, risk_reward_ratio, reasoning_summary, agent_transcripts, trace_id, prompt_version, precedents_k)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (proposal["decision_id"], proposal["timestamp"], proposal["symbol"], proposal["action"],
+                  proposal["stop_loss_strategy"], proposal["take_profit_strategy"], float(proposal["risk_reward_ratio"]),
+                  proposal["reasoning_summary"], json.dumps(snapshot, default=str), trace_id,
+                  prompts.bundle_version(), result.precedents_k))
+            # Persist the setup embedding (journal RAG) on the same connection, so
+            # this decision becomes a future precedent once its outcome lands.
+            journal.persist_embedding(
+                self.pg_db.conn, proposal["decision_id"], proposal["symbol"],
+                proposal["timestamp"], proposal["action"],
+                float(snapshot.get("close", 0.0)),
+                result.setup_text, result.setup_embedding,
+            )
+        finally:
+            self.pg_db.close()
+
+        # Append-only Parquet audit record for EVERY decision (including FLAT).
+        # Unlike decision_log.agent_transcripts (which stores the feature
+        # snapshot), this captures the REAL analyst + trader reasoning so the
+        # full decision corpus is queryable later.
+        audit.append_decision({
+            "decision_id": proposal["decision_id"],
+            "timestamp": proposal["timestamp"],
+            "symbol": proposal["symbol"],
+            "action": proposal["action"],
+            "stop_loss_strategy": proposal["stop_loss_strategy"],
+            "take_profit_strategy": proposal["take_profit_strategy"],
+            "risk_reward_ratio": float(proposal["risk_reward_ratio"]),
+            "reasoning_summary": proposal["reasoning_summary"],
+            "trace_id": trace_id,
+            "agent_transcripts": {
+                "analyst": analyst_report.model_dump(),
+                "trader": proposal,
+            },
+            "snapshot": snapshot,
+        })
+
+        if result.status == "flat":
+            logger.info(f"Head Trader decided FLAT for {sym}. Reasoning: {proposal['reasoning_summary']}")
+            return None
+
+        # Risk Manager outcome (computed inside the decision pipeline).
+        risk_res = result.risk_result
+        if risk_res["approved"]:
+            # Submit order to broker (internally connects and closes DuckDB inside PaperBroker)
+            # Pass entry_price so the live paper-trading path fills the position
+            # immediately at the RiskManager-computed mark, not on the next tick.
+            self.broker.submit_order(
+                symbol=sym,
+                action=proposal["action"],
+                size_usd=risk_res["size_usd"],
+                stop_price=risk_res["stop_price"],
+                take_profit_price=risk_res["take_profit_price"],
+                entry_price=risk_res["entry_price"],
+                decision_id=proposal["decision_id"],
+            )
+
+            self._send_discord_alert(
+                f"🚀 **NEW TRADE ENTERED:** {sym} ({proposal['action'].upper()})\n"
+                f"Entry Price: ${risk_res['entry_price']:.2f}\n"
+                f"Stop Loss: ${risk_res['stop_price']:.2f} ({proposal['stop_loss_strategy']})\n"
+                f"Take Profit: ${risk_res['take_profit_price']:.2f} ({proposal['take_profit_strategy']})\n"
+                f"Position Size: **${risk_res['size_usd']:.2f}** (Risking 1.00% equity)\n"
+                f"Reasoning: *{proposal['reasoning_summary']}*"
+            )
+        else:
+            logger.warning(f"Risk Manager rejected proposal for {sym}: {risk_res['reason']}")
+            self._send_discord_alert(
+                f"⚠️ **RISK VETO:** Rejected {proposal['action'].upper()} on {sym}.\n"
+                f"Reason: {risk_res['reason']}"
+            )
+        return None
+
 
     def _build_retriever(self):
         """Real PrecedentRetriever when JOURNAL_RAG_ENABLED (default true), else NoOp.

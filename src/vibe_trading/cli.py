@@ -32,12 +32,13 @@ def _flush_langfuse():
 
 def execute_trade_once(symbols):
     """One scheduled execution window: warm state from the cache, run a single
-    sync+evaluate, ping the dead-man's-switch on success, and always flush traces
+    sync+evaluate, ping the dead-man's-switch with the window's honest health (a
+    global error or zero symbols evaluated pings /fail), and always flush traces
     and push state back (even if evaluation raised)."""
     state_sync.pull()
     try:
         scheduler = TradingScheduler(symbols)
-        scheduler.sync_and_evaluate()
+        outcome = scheduler.sync_and_evaluate()
 
         # Online evals (best-effort): score decisions whose outcomes just became
         # knowable. A scoring failure must never fail the trade window.
@@ -47,7 +48,7 @@ def execute_trade_once(symbols):
         except Exception as e:
             logger.warning(f"online scoring pass failed (non-fatal): {e}")
 
-        monitoring.ping_healthcheck(success=True)
+        monitoring.ping_healthcheck(success=outcome.healthy)
     finally:
         _flush_langfuse()
         state_sync.push()

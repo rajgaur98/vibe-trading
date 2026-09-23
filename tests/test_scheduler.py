@@ -317,11 +317,11 @@ def test_tick_pings_dead_mans_switch_on_success(monkeypatch):
     the trade-once path, so the `live` deployment had no silent-outage detection."""
     import vibe_trading.runtime.monitoring as monitoring
     import vibe_trading.eval.online as online_mod
-    from vibe_trading.runtime.scheduler import TradingScheduler
+    from vibe_trading.runtime.scheduler import TradingScheduler, TickOutcome
 
     pings = []
     sched = TradingScheduler.__new__(TradingScheduler)
-    sched.sync_and_evaluate = lambda: None
+    sched.sync_and_evaluate = lambda: TickOutcome()  # healthy window
     monkeypatch.setattr(online_mod, "run_scoring_pass", lambda *a, **k: {})
     monkeypatch.setattr(monitoring, "ping_healthcheck", lambda success=True: pings.append(success))
 
@@ -417,3 +417,184 @@ def test_decision_log_insert_carries_bundle_prompt_version(monkeypatch):
     sql, params = insert_calls[0].args[0], insert_calls[0].args[1]
     assert "prompt_version" in sql
     assert prompts.bundle_version() in params
+
+
+# --- per-symbol isolation + honest tick outcome ---
+
+class ServiceUnavailableError(Exception):
+    """Stand-in for litellm.ServiceUnavailableError (NOT a RuntimeError, so the
+    decision pipeline's analyst guard doesn't catch it)."""
+
+
+def _loop_sched(monkeypatch, symbols, run_symbol):
+    """A scheduler wired with mocks for a full sync_and_evaluate pass over `symbols`.
+    `run_symbol(sym, last_ts, exec_price)` drives the decision pipeline per symbol.
+    Returns (sched, alerts, decision_log_params)."""
+    from vibe_trading.runtime.decision_pipeline import DecisionResult
+    import vibe_trading.audit as audit_mod
+
+    sched = _scheduler_without_init()
+    sched.symbols = list(symbols)
+    sched.fetcher = MagicMock()
+    sched.broker = MagicMock()
+    sched.broker.get_open_positions.return_value = []
+    sched.broker.get_mark_price.return_value = 100.0
+    fake_db_conn = MagicMock()
+    fake_db_conn.execute.return_value.fetchone.return_value = (datetime(2026, 6, 1), 100.0)
+    sched.db = MagicMock()
+    sched.db.conn = fake_db_conn
+    sched._check_cost_alarm = lambda: None
+    sched._trading_blocked_by_cost = lambda: False
+    sched._snapshot_equity = lambda: None
+    sched._record_closed_trades = lambda closed: None
+    alerts = []
+    sched._send_discord_alert = lambda msg: alerts.append(msg)
+
+    def _flat(sym):
+        report = MagicMock()
+        report.model_dump.return_value = {}
+        proposal = {
+            "decision_id": f"dec-{sym}", "timestamp": "2026-06-01T00:00:00", "symbol": sym,
+            "action": "flat", "stop_loss_strategy": "n/a", "take_profit_strategy": "n/a",
+            "risk_reward_ratio": 0.0, "reasoning_summary": "no edge",
+        }
+        return DecisionResult(symbol=sym, status="flat", analyst_report=report,
+                              snapshot={"close": 100.0}, proposal=proposal, trace_id="t")
+
+    sched.decision_pipeline = MagicMock()
+    sched.decision_pipeline.run_symbol.side_effect = lambda sym, ts, px: run_symbol(sym, _flat)
+
+    logged = []
+    fake_pg_conn = MagicMock()
+    fake_pg_conn.execute.side_effect = lambda sql, params=None: (
+        logged.append(params) if "INSERT OR IGNORE INTO decision_log" in sql else None)
+    sched.pg_db = MagicMock()
+    sched.pg_db.conn = fake_pg_conn
+    monkeypatch.setattr(audit_mod, "append_decision", lambda record: None)
+    return sched, alerts, logged
+
+
+def test_one_symbol_llm_failure_does_not_skip_remaining_symbols(monkeypatch):
+    """Prod 2026-09-22: the first symbol's Gemini 503 aborted the whole tick, so NO
+    symbol was evaluated. Each symbol must be isolated: log, count, move on."""
+    def run_symbol(sym, flat):
+        if sym == "BTC/USDT":
+            raise ServiceUnavailableError("503 gemma-4-31b-it overloaded")
+        return flat(sym)
+
+    sched, alerts, logged = _loop_sched(
+        monkeypatch, ["BTC/USDT", "ETH/USDT", "SOL/USDT"], run_symbol)
+
+    outcome = sched.sync_and_evaluate()
+
+    assert sched.decision_pipeline.run_symbol.call_count == 3
+    assert [p[2] for p in logged] == ["ETH/USDT", "SOL/USDT"]  # decisions still logged
+    assert outcome.attempted == 3
+    assert outcome.evaluated == 2
+    assert list(outcome.failures) == ["BTC/USDT"]
+    assert outcome.global_error is None
+    assert outcome.healthy  # partial failure still counts as a working tick
+
+
+def test_symbol_failures_send_one_summary_alert(monkeypatch):
+    """N failing symbols → ONE Discord summary listing them, not N alerts."""
+    def run_symbol(sym, flat):
+        raise ServiceUnavailableError("503")
+
+    sched, alerts, logged = _loop_sched(
+        monkeypatch, ["BTC/USDT", "ETH/USDT", "SOL/USDT"], run_symbol)
+
+    outcome = sched.sync_and_evaluate()
+
+    assert len(alerts) == 1
+    assert all(s in alerts[0] for s in ("BTC/USDT", "ETH/USDT", "SOL/USDT"))
+    assert "ServiceUnavailableError" in alerts[0]
+    assert outcome.attempted == 3 and outcome.evaluated == 0
+    assert not outcome.healthy  # attempted symbols but evaluated none
+
+
+def test_soft_pipeline_skips_count_as_failures(monkeypatch):
+    """analyst_failed / no_snapshot produce no decision, so they must not count as
+    'evaluated' (else a tick of all-skips would look healthy)."""
+    from vibe_trading.runtime.decision_pipeline import DecisionResult
+
+    def run_symbol(sym, flat):
+        return DecisionResult(sym, "analyst_failed")
+
+    sched, alerts, logged = _loop_sched(monkeypatch, ["BTC/USDT"], run_symbol)
+
+    outcome = sched.sync_and_evaluate()
+
+    assert outcome.attempted == 1 and outcome.evaluated == 0
+    assert "BTC/USDT" in outcome.failures
+    assert not outcome.healthy
+
+
+def test_no_failures_sends_no_summary_alert(monkeypatch):
+    sched, alerts, logged = _loop_sched(
+        monkeypatch, ["BTC/USDT", "ETH/USDT"], lambda sym, flat: flat(sym))
+
+    outcome = sched.sync_and_evaluate()
+
+    assert alerts == []
+    assert outcome.attempted == 2 and outcome.evaluated == 2 and outcome.healthy
+
+
+def test_global_failure_is_reported_in_outcome(monkeypatch):
+    """A window-wide failure (candle fetch, DB) still aborts the window via the outer
+    guard, alerts once, and flags the outcome so the health ping goes red."""
+    sched, alerts, logged = _loop_sched(
+        monkeypatch, ["BTC/USDT"], lambda sym, flat: flat(sym))
+    sched.fetcher.incremental_update.side_effect = RuntimeError("exchange down")
+
+    outcome = sched.sync_and_evaluate()
+
+    assert sched.decision_pipeline.run_symbol.call_count == 0
+    assert outcome.global_error and "exchange down" in outcome.global_error
+    assert not outcome.healthy
+    assert len(alerts) == 1 and "SCHEDULER ERROR" in alerts[0]
+
+
+def test_tick_outcome_health_rule():
+    from vibe_trading.runtime.scheduler import TickOutcome
+    assert TickOutcome().healthy                                   # nothing to evaluate
+    assert TickOutcome(attempted=3, evaluated=1, failures={"a": "x", "b": "y"}).healthy
+    assert not TickOutcome(attempted=3, evaluated=0).healthy       # evaluated nothing
+    assert not TickOutcome(global_error="db down").healthy
+
+
+def _tick_with_outcome(monkeypatch, outcome):
+    import vibe_trading.runtime.monitoring as monitoring
+    import vibe_trading.eval.online as online_mod
+
+    calls = []
+    sched = _scheduler_without_init()
+    sched.sync_and_evaluate = lambda: outcome
+    monkeypatch.setattr(online_mod, "run_scoring_pass",
+                        lambda *a, **k: (calls.append("score"), {})[1])
+    monkeypatch.setattr(monitoring, "ping_healthcheck",
+                        lambda success=True: calls.append(f"ping:{success}"))
+    sched._tick()
+    return calls
+
+
+def test_tick_pings_fail_when_no_symbol_evaluated(monkeypatch):
+    """The dead-man's-switch must not stay green while the bot evaluates nothing
+    (prod 2026-09-22: every tick 503'd, healthchecks.io stayed green)."""
+    from vibe_trading.runtime.scheduler import TickOutcome
+    calls = _tick_with_outcome(
+        monkeypatch, TickOutcome(attempted=10, evaluated=0, failures={"BTC/USDT": "503"}))
+    assert calls == ["score", "ping:False"]  # scoring (no LLM) still runs
+
+
+def test_tick_pings_fail_on_global_error(monkeypatch):
+    from vibe_trading.runtime.scheduler import TickOutcome
+    calls = _tick_with_outcome(monkeypatch, TickOutcome(global_error="db down"))
+    assert calls[-1] == "ping:False"
+
+
+def test_tick_pings_success_on_partial_failure(monkeypatch):
+    from vibe_trading.runtime.scheduler import TickOutcome
+    calls = _tick_with_outcome(
+        monkeypatch, TickOutcome(attempted=10, evaluated=9, failures={"BTC/USDT": "503"}))
+    assert calls[-1] == "ping:True"
